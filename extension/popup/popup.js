@@ -1,6 +1,7 @@
 /**
  * FocusFlow — Popup Script
- * Renders the mini-dashboard: productivity score, top sites, focus mode toggle.
+ * Renders the mini-dashboard: productivity score, top sites, pomodoro timer,
+ * daily goal bar, and focus mode toggle.
  */
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -15,8 +16,20 @@ function formatTime(seconds) {
   return `${secs}s`;
 }
 
+function formatTimeHM(seconds) {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0 && m > 0) return `${h}h ${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
+}
+
 function getFaviconUrl(domain) {
   return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`;
+}
+
+function padTwo(n) {
+  return String(Math.floor(n)).padStart(2, '0');
 }
 
 // ── DOM References ───────────────────────────────────────────────────
@@ -38,6 +51,21 @@ const focusTimeRemainingEl = document.getElementById('focusTimeRemaining');
 const themeToggleEl = document.getElementById('themeToggle');
 const openDashboardEl = document.getElementById('openDashboard');
 const openOptionsEl = document.getElementById('openOptions');
+
+// Goal Bar
+const goalBarFill = document.getElementById('goalBarFill');
+const goalText = document.getElementById('goalText');
+const goalSection = document.getElementById('goalSection');
+
+// Pomodoro
+const pomoRing = document.getElementById('pomoRing');
+const pomoTime = document.getElementById('pomoTime');
+const pomoMode = document.getElementById('pomoMode');
+const pomoSessions = document.getElementById('pomoSessions');
+const pomoStart = document.getElementById('pomoStart');
+const pomoPause = document.getElementById('pomoPause');
+const pomoReset = document.getElementById('pomoReset');
+const pomodoroSection = document.getElementById('pomodoroSection');
 
 // ── Theme ────────────────────────────────────────────────────────────
 
@@ -61,7 +89,6 @@ themeToggleEl.addEventListener('click', async () => {
 // ── Dashboard Link ───────────────────────────────────────────────────
 
 openDashboardEl.addEventListener('click', () => {
-  // Open the dashboard (when served locally or deployed)
   chrome.tabs.create({ url: 'https://focus-flow-two-orpin.vercel.app/' });
 });
 
@@ -97,6 +124,14 @@ async function loadData() {
     // Get focus mode
     const focusMode = await chrome.runtime.sendMessage({ type: 'GET_FOCUS_MODE' });
     updateFocusMode(focusMode);
+
+    // Daily goal bar
+    await updateGoalBar(scoreData);
+
+    // Pomodoro state
+    const pomoState = await chrome.runtime.sendMessage({ type: 'GET_POMODORO_STATE' });
+    updatePomodoroUI(pomoState);
+
   } catch (e) {
     console.warn('FocusFlow: Failed to load data', e);
   }
@@ -112,12 +147,34 @@ function updateScore(data) {
   scoreNumber.textContent = score;
   scoreRing.style.strokeDasharray = circumference;
 
-  // Animate after a brief delay
   requestAnimationFrame(() => {
     setTimeout(() => {
       scoreRing.style.strokeDashoffset = offset;
     }, 100);
   });
+}
+
+// ── Daily Goal Bar ───────────────────────────────────────────────────
+
+async function updateGoalBar(scoreData) {
+  try {
+    const goalsResult = await chrome.storage.local.get('goals');
+    const goals = goalsResult.goals || { dailyProductiveHours: 4 };
+    const targetSeconds = (goals.dailyProductiveHours || 4) * 3600;
+    const productiveSeconds = scoreData?.productiveTime || 0;
+
+    const pct = Math.min(100, (productiveSeconds / targetSeconds) * 100);
+    const achieved = pct >= 100;
+
+    goalBarFill.style.width = `${pct}%`;
+    goalText.textContent = `${formatTimeHM(productiveSeconds)} / ${goals.dailyProductiveHours}h`;
+
+    if (achieved) {
+      goalSection.classList.add('achieved');
+    } else {
+      goalSection.classList.remove('achieved');
+    }
+  } catch (_) {}
 }
 
 // ── Update Sites List ────────────────────────────────────────────────
@@ -164,6 +221,74 @@ function updateCurrentSession(session) {
   }
 }
 
+// ── Pomodoro Timer ───────────────────────────────────────────────────
+
+const POMO_WORK = 25 * 60;
+const POMO_CIRCUMFERENCE = 2 * Math.PI * 34; // r=34 → 213.63
+
+function updatePomodoroUI(state) {
+  if (!state) return;
+
+  const { status, timeLeft, sessionsCompleted, isBreak, endTimestamp } = state;
+
+  // Calculate real-time remaining
+  let displaySeconds = timeLeft;
+  if (status === 'running' && endTimestamp) {
+    displaySeconds = Math.max(0, Math.round((endTimestamp - Date.now()) / 1000));
+  }
+
+  const totalDuration = isBreak
+    ? (sessionsCompleted % 4 === 0 && sessionsCompleted > 0 ? 15 * 60 : 5 * 60)
+    : POMO_WORK;
+
+  const progress = displaySeconds / totalDuration;
+  const offset = POMO_CIRCUMFERENCE * (1 - progress);
+
+  // Update ring
+  pomoRing.style.strokeDashoffset = offset;
+
+  // Update time display
+  const mins = Math.floor(displaySeconds / 60);
+  const secs = displaySeconds % 60;
+  pomoTime.textContent = `${padTwo(mins)}:${padTwo(secs)}`;
+
+  // Update mode label
+  pomoMode.textContent = isBreak
+    ? (sessionsCompleted % 4 === 0 && sessionsCompleted > 0 ? 'Long Break' : 'Break')
+    : 'Work';
+
+  // Update sessions count
+  pomoSessions.textContent = sessionsCompleted;
+
+  // Update section classes
+  pomodoroSection.classList.toggle('is-running', status === 'running');
+  pomodoroSection.classList.toggle('is-break', isBreak);
+
+  // Toggle start/pause buttons
+  if (status === 'running') {
+    pomoStart.style.display = 'none';
+    pomoPause.style.display = 'flex';
+  } else {
+    pomoStart.style.display = 'flex';
+    pomoPause.style.display = 'none';
+  }
+}
+
+pomoStart.addEventListener('click', async () => {
+  const state = await chrome.runtime.sendMessage({ type: 'START_POMODORO' });
+  updatePomodoroUI(state);
+});
+
+pomoPause.addEventListener('click', async () => {
+  const state = await chrome.runtime.sendMessage({ type: 'PAUSE_POMODORO' });
+  updatePomodoroUI(state);
+});
+
+pomoReset.addEventListener('click', async () => {
+  const state = await chrome.runtime.sendMessage({ type: 'RESET_POMODORO' });
+  updatePomodoroUI(state);
+});
+
 // ── Focus Mode ───────────────────────────────────────────────────────
 
 function updateFocusMode(focusMode) {
@@ -194,7 +319,7 @@ focusToggleEl.addEventListener('click', async () => {
   const result = await chrome.runtime.sendMessage({
     type: 'TOGGLE_FOCUS_MODE',
     domains: defaultBlockDomains,
-    duration: 25 // 25 minute Pomodoro
+    duration: 25
   });
   updateFocusMode(result);
 });
@@ -206,9 +331,11 @@ let refreshInterval;
 function startAutoRefresh() {
   refreshInterval = setInterval(async () => {
     try {
+      // Update current session
       const session = await chrome.runtime.sendMessage({ type: 'GET_CURRENT_SESSION' });
       updateCurrentSession(session);
 
+      // Update total time
       const totalTime = await chrome.runtime.sendMessage({ type: 'GET_TODAY_TOTAL' });
       totalTimeEl.textContent = formatTime(totalTime);
 
@@ -217,6 +344,11 @@ function startAutoRefresh() {
       if (focusMode?.active && focusMode.endTime) {
         updateFocusTimer(focusMode.endTime);
       }
+
+      // Update pomodoro timer
+      const pomoState = await chrome.runtime.sendMessage({ type: 'GET_POMODORO_STATE' });
+      updatePomodoroUI(pomoState);
+
     } catch {
       // Service worker might be restarting
     }
@@ -233,3 +365,4 @@ startAutoRefresh();
 window.addEventListener('unload', () => {
   if (refreshInterval) clearInterval(refreshInterval);
 });
+

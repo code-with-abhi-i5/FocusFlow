@@ -29,7 +29,8 @@ const STORAGE_KEYS = {
   GOALS: 'goals',
   STREAKS: 'streaks',
   LAST_SYNC: 'lastSync',
-  USER: 'user'
+  USER: 'user',
+  POMODORO: 'pomodoro'
 };
 
 /**
@@ -303,6 +304,30 @@ export async function getUser() {
 
 export async function saveUser(user) {
   await chrome.storage.local.set({ [STORAGE_KEYS.USER]: user });
+}
+
+// ── Pomodoro State ────────────────────────────────────────────────────
+
+/**
+ * Get Pomodoro timer state
+ * @returns {Promise<{status:'idle'|'running'|'paused'|'break', timeLeft:number, sessionsCompleted:number, isBreak:boolean, endTimestamp:number|null}>}
+ */
+export async function getPomodoroState() {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.POMODORO);
+  return result[STORAGE_KEYS.POMODORO] || {
+    status: 'idle',
+    timeLeft: 25 * 60, // 25 minutes in seconds
+    sessionsCompleted: 0,
+    isBreak: false,
+    endTimestamp: null // epoch ms when current interval ends
+  };
+}
+
+/**
+ * Save Pomodoro timer state
+ */
+export async function savePomodoroState(state) {
+  await chrome.storage.local.set({ [STORAGE_KEYS.POMODORO]: state });
 }
 
 // ── Data Cleanup ─────────────────────────────────────────────────────

@@ -223,7 +223,9 @@ const STORAGE_KEYS = {
   FOCUS_MODE: 'focusMode',
   PENDING_SYNC: 'pendingSync',
   GOALS: 'goals',
-  STREAKS: 'streaks'};
+  STREAKS: 'streaks',
+  POMODORO: 'pomodoro'
+};
 
 /**
  * Get today's date key in YYYY-MM-DD format
@@ -436,6 +438,30 @@ async function saveStreaks(streaks) {
   await chrome.storage.local.set({ [STORAGE_KEYS.STREAKS]: streaks });
 }
 
+// ── Pomodoro State ────────────────────────────────────────────────────
+
+/**
+ * Get Pomodoro timer state
+ * @returns {Promise<{status:'idle'|'running'|'paused'|'break', timeLeft:number, sessionsCompleted:number, isBreak:boolean, endTimestamp:number|null}>}
+ */
+async function getPomodoroState() {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.POMODORO);
+  return result[STORAGE_KEYS.POMODORO] || {
+    status: 'idle',
+    timeLeft: 25 * 60, // 25 minutes in seconds
+    sessionsCompleted: 0,
+    isBreak: false,
+    endTimestamp: null // epoch ms when current interval ends
+  };
+}
+
+/**
+ * Save Pomodoro timer state
+ */
+async function savePomodoroState(state) {
+  await chrome.storage.local.set({ [STORAGE_KEYS.POMODORO]: state });
+}
+
 // ── Data Cleanup ─────────────────────────────────────────────────────
 
 /**
@@ -469,6 +495,7 @@ var storage = /*#__PURE__*/Object.freeze({
   getDateKey: getDateKey,
   getFocusMode: getFocusMode,
   getGoals: getGoals,
+  getPomodoroState: getPomodoroState,
   getSettings: getSettings,
   getStreaks: getStreaks,
   getTimeData: getTimeData,
@@ -477,6 +504,7 @@ var storage = /*#__PURE__*/Object.freeze({
   getTodayTotalTime: getTodayTotalTime,
   getTopDomainsToday: getTopDomainsToday,
   saveFocusMode: saveFocusMode,
+  savePomodoroState: savePomodoroState,
   saveStreaks: saveStreaks,
   saveTimeData: saveTimeData,
   startSession: startSession,
@@ -685,12 +713,37 @@ function isUserActive() {
 
 /**
  * FocusFlow — Productivity Alerts
- * Chrome notifications for productivity insights and limit warnings.
+ * Chrome notifications for productivity insights, limit warnings, streak
+ * milestones, and motivational reminders.
  */
 
 
 // Track which alerts have been shown to avoid spamming
 let alertsShown = new Set();
+
+// Motivational quotes (Hindi + English mix)
+const MOTIVATIONAL_QUOTES = [
+  'Ek kadam aur — tu kar sakta hai! 💪',
+  'Focus karo, results zaroor milenge. 🎯',
+  'Hard work kabhi bekar nahi jaata. 🔥',
+  'Aaj ki mehnat kal ka result hai. ✨',
+  'Small steps every day = big results. 🚀',
+  'Stay focused, stay hungry. 🍅',
+  'Distraction temporary hai, regret permanent. ⚡',
+  'Tu capable hai — prove it to yourself. 💎',
+  'One more hour of work = one step closer to your goal.',
+  'Champions bhi kaam karte hain jab mann nahi karta.',
+  'Deep work is your superpower. 🧠',
+  'The best time to focus is RIGHT NOW. ⏰',
+  'Jo aaj karta hai, wahi kal enjoy karta hai. 🌟',
+  'Progress over perfection. Keep moving! 🏃',
+  'Your future self will thank you. 🙌',
+  'Sab kuch milta hai — sirf karna padta hai. 💯',
+  'Turn off distractions, turn on your potential. 🔕',
+  'Excellence is a habit. Build it today.',
+  'Kaam karo aaj, kal khud bolega. ✅',
+  'Every expert was once a beginner. Keep going! 🌱'
+];
 
 /**
  * Reset daily alerts (call at midnight or on new day)
@@ -701,14 +754,17 @@ function resetDailyAlerts() {
 
 /**
  * Check all alert conditions and fire notifications as needed
+ * @param {object} [streaks] — optional pre-fetched streaks data
  */
-async function checkAlerts() {
+async function checkAlerts(streaks) {
   const settings = await getSettings();
   if (!settings.notificationsEnabled) return;
 
   await checkSiteLimits();
   await checkSocialMediaLimit();
   await checkProductiveGoal();
+  await checkStreakNotifications(streaks);
+  await checkMotivationalReminder();
 }
 
 /**
@@ -795,16 +851,90 @@ async function checkProductiveGoal() {
     alertsShown.add('productive_100');
     showNotification(
       '🎉 Goal Achieved!',
-      `You've hit your daily productive goal of ${goals.dailyProductiveHours}h! Great work!`,
+      `You've hit your daily productive goal of ${goals.dailyProductiveHours}h! Incredible work today!`,
       'goal_achieved'
+    );
+  } else if (percentDone >= 75 && !alertsShown.has('productive_75')) {
+    alertsShown.add('productive_75');
+    showNotification(
+      '💪 Almost There!',
+      `You're 75% through your productive goal. Keep pushing!`,
+      'goal_75'
     );
   } else if (percentDone >= 50 && !alertsShown.has('productive_50')) {
     alertsShown.add('productive_50');
     showNotification(
-      '💪 Halfway There!',
-      `You're 50% through your productive goal. Keep going!`,
+      '🔥 Halfway There!',
+      `You're 50% through your productive goal. Great momentum!`,
       'goal_progress'
     );
+  }
+}
+
+/**
+ * Check streak milestones and send motivational notifications
+ * @param {object} [streaks]
+ */
+async function checkStreakNotifications(streaks) {
+  if (!streaks) {
+    streaks = await getStreaks();
+  }
+  const streak = streaks?.currentStreak || 0;
+  if (streak === 0) return;
+
+  const milestones = [3, 5, 7, 14, 21, 30, 60, 100];
+  for (const milestone of milestones) {
+    const key = `streak_${milestone}`;
+    if (streak === milestone && !alertsShown.has(key)) {
+      alertsShown.add(key);
+      const messages = {
+        3: '3-day streak! Acha shuruat hai! 🔥',
+        5: '5-day streak! Tu serious hai productivity ke baare mein! 💪',
+        7: 'Ek hafta complete! Tu unstoppable hai! 🚀',
+        14: '2 weeks streak! Habit ban gayi! 🏆',
+        21: '21 days! Science says this is now a habit! 🧠',
+        30: 'Ek mahina! Legendary! 👑',
+        60: '60-day streak! You are an absolute machine! 🤖',
+        100: '100-day streak! INCREDIBLE! 🌟 Hall of fame!'
+      };
+      showNotification(
+        `🔥 ${milestone}-Day Streak!`,
+        messages[milestone] || `${milestone}-day productivity streak! Keep it up!`,
+        `streak_milestone_${milestone}`
+      );
+      break;
+    }
+  }
+}
+
+/**
+ * Send a random motivational reminder every ~3 hours if user has been idle
+ * or spending time on unproductive sites
+ */
+async function checkMotivationalReminder() {
+  const dayData = await getTodayData();
+
+  let unproductiveSeconds = 0;
+  for (const [domain, data] of Object.entries(dayData)) {
+    if (classifyDomain(domain) === 'unproductive') {
+      unproductiveSeconds += data.timeSpent;
+    }
+  }
+
+  // Fire a motivational quote if unproductive time > 1.5 hours
+  const thresholds = [90, 150, 210]; // minutes of unproductive time
+  for (const threshold of thresholds) {
+    const key = `motivational_${threshold}`;
+    if (unproductiveSeconds / 60 >= threshold && !alertsShown.has(key)) {
+      alertsShown.add(key);
+      const quote = MOTIVATIONAL_QUOTES[Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length)];
+      showNotification(
+        '💡 FocusFlow Reminder',
+        quote,
+        `motivational_${threshold}`
+      );
+      break;
+    }
   }
 }
 
@@ -1503,14 +1633,6 @@ function isSafari() {
     return (!isNode() &&
         !!navigator.userAgent &&
         navigator.userAgent.includes('Safari') &&
-        !navigator.userAgent.includes('Chrome'));
-}
-/** Returns true if we are running in Safari or WebKit */
-function isSafariOrWebkit() {
-    return (!isNode() &&
-        !!navigator.userAgent &&
-        (navigator.userAgent.includes('Safari') ||
-            navigator.userAgent.includes('WebKit')) &&
         !navigator.userAgent.includes('Chrome'));
 }
 /**
@@ -16648,14 +16770,6 @@ function __PRIVATE_isSurrogate(e) {
 }
 
 /**
- * Returns the immediate lexicographically-following string. This is useful to
- * construct an inclusive range for indexeddb iterators.
- */ function __PRIVATE_immediateSuccessor(e) {
-    // Return the input string, with an additional NUL byte appended.
-    return e + "\0";
-}
-
-/**
  * @license
  * Copyright 2017 Google LLC
  *
@@ -17321,79 +17435,6 @@ class SnapshotVersion {
  */ const L = -1;
 
 /**
- * The initial sequence number for each index. Gets updated during index
- * backfill.
- */
-/**
- * An index definition for field indexes in Firestore.
- *
- * Every index is associated with a collection. The definition contains a list
- * of fields and their index kind (which can be `ASCENDING`, `DESCENDING` or
- * `CONTAINS` for ArrayContains/ArrayContainsAny queries).
- *
- * Unlike the backend, the SDK does not differentiate between collection or
- * collection group-scoped indices. Every index can be used for both single
- * collection and collection group queries.
- */
-class FieldIndex {
-    constructor(
-    /**
-     * The index ID. Returns -1 if the index ID is not available (e.g. the index
-     * has not yet been persisted).
-     */
-    e, 
-    /** The collection ID this index applies to. */
-    t, 
-    /** The field segments for this index. */
-    n, 
-    /** Shows how up-to-date the index is for the current user. */
-    r) {
-        this.indexId = e, this.collectionGroup = t, this.fields = n, this.indexState = r;
-    }
-}
-
-/** An ID for an index that has not yet been added to persistence.  */
-/** Returns the ArrayContains/ArrayContainsAny segment for this index. */
-function __PRIVATE_fieldIndexGetArraySegment(e) {
-    return e.fields.find((e => 2 /* IndexKind.CONTAINS */ === e.kind));
-}
-
-/** Returns all directional (ascending/descending) segments for this index. */ function __PRIVATE_fieldIndexGetDirectionalSegments(e) {
-    return e.fields.filter((e => 2 /* IndexKind.CONTAINS */ !== e.kind));
-}
-
-/** Returns a debug representation of the field index */ FieldIndex.UNKNOWN_ID = -1;
-
-/** An index component consisting of field path and index type.  */
-class IndexSegment {
-    constructor(
-    /** The field path of the component. */
-    e, 
-    /** The fields sorting order. */
-    t) {
-        this.fieldPath = e, this.kind = t;
-    }
-}
-
-/**
- * Stores the "high water mark" that indicates how updated the Index is for the
- * current user.
- */ class IndexState {
-    constructor(
-    /**
-     * Indicates when the index was last updated (relative to other indexes).
-     */
-    e, 
-    /** The the latest indexed read time, document and batch id. */
-    t) {
-        this.sequenceNumber = e, this.offset = t;
-    }
-    /** The state of an index that has not yet been backfilled. */    static empty() {
-        return new IndexState(0, IndexOffset.min());
-    }
-}
-
-/**
  * Creates an offset that matches all documents with a read time higher than
  * `readTime`.
  */ function __PRIVATE_newIndexOffsetSuccessorFromReadTime(e, t) {
@@ -17659,533 +17700,15 @@ function __PRIVATE_indexOffsetComparator(e, t) {
     }
 }
 
-/**
- * @license
- * Copyright 2017 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-// References to `indexedDB` are guarded by SimpleDb.isAvailable() and getGlobal()
-/* eslint-disable no-restricted-globals */ const U = "SimpleDb";
-
-/**
- * The maximum number of retry attempts for an IndexedDb transaction that fails
- * with a DOMException.
- */
-/**
- * Wraps an IDBTransaction and exposes a store() method to get a handle to a
- * specific object store.
- */
-class __PRIVATE_SimpleDbTransaction {
-    static open(e, t, n, r) {
-        try {
-            return new __PRIVATE_SimpleDbTransaction(t, e.transaction(r, n));
-        } catch (e) {
-            throw new __PRIVATE_IndexedDbTransactionError(t, e);
-        }
-    }
-    constructor(e, t) {
-        this.action = e, this.transaction = t, this.aborted = false, 
-        /**
-         * A `Promise` that resolves with the result of the IndexedDb transaction.
-         */
-        this.v = new __PRIVATE_Deferred, this.transaction.oncomplete = () => {
-            this.v.resolve();
-        }, this.transaction.onabort = () => {
-            t.error ? this.v.reject(new __PRIVATE_IndexedDbTransactionError(e, t.error)) : this.v.resolve();
-        }, this.transaction.onerror = t => {
-            const n = __PRIVATE_checkForAndReportiOSError(t.target.error);
-            this.v.reject(new __PRIVATE_IndexedDbTransactionError(e, n));
-        };
-    }
-    get S() {
-        return this.v.promise;
-    }
-    abort(e) {
-        e && this.v.reject(e), this.aborted || (__PRIVATE_logDebug(U, "Aborting transaction:", e ? e.message : "Client-initiated abort"), 
-        this.aborted = true, this.transaction.abort());
-    }
-    D() {
-        // If the browser supports V3 IndexedDB, we invoke commit() explicitly to
-        // speed up index DB processing if the event loop remains blocks.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const e = this.transaction;
-        this.aborted || "function" != typeof e.commit || e.commit();
-    }
-    /**
-     * Returns a SimpleDbStore<KeyType, ValueType> for the specified store. All
-     * operations performed on the SimpleDbStore happen within the context of this
-     * transaction and it cannot be used anymore once the transaction is
-     * completed.
-     *
-     * Note that we can't actually enforce that the KeyType and ValueType are
-     * correct, but they allow type safety through the rest of the consuming code.
-     */    store(e) {
-        const t = this.transaction.objectStore(e);
-        return new __PRIVATE_SimpleDbStore(t);
-    }
-}
-
-/**
- * Provides a wrapper around IndexedDb with a simplified interface that uses
- * Promise-like return values to chain operations. Real promises cannot be used
- * since .then() continuations are executed asynchronously (e.g. via
- * .setImmediate), which would cause IndexedDB to end the transaction.
- * See PersistencePromise for more details.
- */ class __PRIVATE_SimpleDb {
-    /** Deletes the specified database. */
-    static delete(e) {
-        __PRIVATE_logDebug(U, "Removing database:", e);
-        return __PRIVATE_wrapRequest(getGlobal().indexedDB.deleteDatabase(e)).toPromise();
-    }
-    /** Returns true if IndexedDB is available in the current environment. */    static C() {
-        if (!isIndexedDBAvailable()) return false;
-        if (__PRIVATE_SimpleDb.F()) return true;
-        // We extensively use indexed array values and compound keys,
-        // which IE and Edge do not support. However, they still have indexedDB
-        // defined on the window, so we need to check for them here and make sure
-        // to return that persistence is not enabled for those browsers.
-        // For tracking support of this feature, see here:
-        // https://developer.microsoft.com/en-us/microsoft-edge/platform/status/indexeddbarraysandmultientrysupport/
-        // Check the UA string to find out the browser.
-                const e = getUA(), t = __PRIVATE_SimpleDb.O(e), n = 0 < t && t < 10, r = __PRIVATE_getAndroidVersion(e), i = 0 < r && r < 4.5;
-        // IE 10
-        // ua = 'Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.2; Trident/6.0)';
-        // IE 11
-        // ua = 'Mozilla/5.0 (Windows NT 6.3; Trident/7.0; rv:11.0) like Gecko';
-        // Edge
-        // ua = 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML,
-        // like Gecko) Chrome/39.0.2171.71 Safari/537.36 Edge/12.0';
-        // iOS Safari: Disable for users running iOS version < 10.
-                return !(e.indexOf("MSIE ") > 0 || e.indexOf("Trident/") > 0 || e.indexOf("Edge/") > 0 || n || i);
-    }
-    /**
-     * Returns true if the backing IndexedDB store is the Node IndexedDBShim
-     * (see https://github.com/axemclion/IndexedDBShim).
-     */    static F() {
-        return "undefined" != typeof process && "YES" === process.__PRIVATE_env?.__PRIVATE_USE_MOCK_PERSISTENCE;
-    }
-    /** Helper to get a typed SimpleDbStore from a transaction. */    static M(e, t) {
-        return e.store(t);
-    }
-    // visible for testing
-    /** Parse User Agent to determine iOS version. Returns -1 if not found. */
-    static O(e) {
-        const t = e.match(/i(?:phone|pad|pod) os ([\d_]+)/i), n = t ? t[1].split("_").slice(0, 2).join(".") : "-1";
-        return Number(n);
-    }
-    /*
-     * Creates a new SimpleDb wrapper for IndexedDb database `name`.
-     *
-     * Note that `version` must not be a downgrade. IndexedDB does not support
-     * downgrading the schema version. We currently do not support any way to do
-     * versioning outside of IndexedDB's versioning mechanism, as only
-     * version-upgrade transactions are allowed to do things like create
-     * objectstores.
-     */    constructor(e, t, n) {
-        this.name = e, this.version = t, this.N = n, this.L = null;
-        // NOTE: According to https://bugs.webkit.org/show_bug.cgi?id=197050, the
-        // bug we're checking for should exist in iOS >= 12.2 and < 13, but for
-        // whatever reason it's much harder to hit after 12.2 so we only proactively
-        // log on 12.2.
-        12.2 === __PRIVATE_SimpleDb.O(getUA()) && __PRIVATE_logError("Firestore persistence suffers from a bug in iOS 12.2 Safari that may cause your app to stop working. See https://stackoverflow.com/q/56496296/110915 for details and a potential workaround.");
-    }
-    /**
-     * Opens the specified database, creating or upgrading it if necessary.
-     */    async B(e) {
-        return this.db || (__PRIVATE_logDebug(U, "Opening database:", this.name), this.db = await new Promise(((t, n) => {
-            // TODO(mikelehen): Investigate browser compatibility.
-            // https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API/Using_IndexedDB
-            // suggests IE9 and older WebKit browsers handle upgrade
-            // differently. They expect setVersion, as described here:
-            // https://developer.mozilla.org/en-US/docs/Web/API/IDBVersionChangeRequest/setVersion
-            const r = indexedDB.open(this.name, this.version);
-            r.onsuccess = e => {
-                const n = e.target.result;
-                t(n);
-            }, r.onblocked = () => {
-                n(new __PRIVATE_IndexedDbTransactionError(e, "Cannot upgrade IndexedDB schema while another tab is open. Close all tabs that access Firestore and reload this page to proceed."));
-            }, r.onerror = t => {
-                const r = t.target.error;
-                "VersionError" === r.name ? n(new FirestoreError(D.FAILED_PRECONDITION, "A newer version of the Firestore SDK was previously used and so the persisted data is not compatible with the version of the SDK you are now using. The SDK will operate with persistence disabled. If you need persistence, please re-upgrade to a newer version of the SDK or else clear the persisted IndexedDB data for your app to start fresh.")) : "InvalidStateError" === r.name ? n(new FirestoreError(D.FAILED_PRECONDITION, "Unable to open an IndexedDB connection. This could be due to running in a private browsing session on a browser whose private browsing sessions do not support IndexedDB: " + r)) : n(new __PRIVATE_IndexedDbTransactionError(e, r));
-            }, r.onupgradeneeded = e => {
-                __PRIVATE_logDebug(U, 'Database "' + this.name + '" requires upgrade from version:', e.oldVersion);
-                const t = e.target.result;
-                this.N.U(t, r.transaction, e.oldVersion, this.version).next((() => {
-                    __PRIVATE_logDebug(U, "Database upgrade to version " + this.version + " complete");
-                }));
-            };
-        }))), this.k && (this.db.onversionchange = e => this.k(e)), this.db;
-    }
-    q(e) {
-        this.k = e, this.db && (this.db.onversionchange = t => e(t));
-    }
-    async runTransaction(e, t, n, r) {
-        const i = "readonly" === t;
-        let s = 0;
-        for (;;) {
-            ++s;
-            try {
-                this.db = await this.B(e);
-                const t = __PRIVATE_SimpleDbTransaction.open(this.db, e, i ? "readonly" : "readwrite", n), s = r(t).next((e => (t.D(), 
-                e))).catch((e => (
-                // Abort the transaction if there was an error.
-                t.abort(e), PersistencePromise.reject(e)))).toPromise();
-                // As noted above, errors are propagated by aborting the transaction. So
-                // we swallow any error here to avoid the browser logging it as unhandled.
-                return s.catch((() => {})), 
-                // Wait for the transaction to complete (i.e. IndexedDb's onsuccess event to
-                // fire), but still return the original transactionFnResult back to the
-                // caller.
-                await t.S, s;
-            } catch (e) {
-                const t = e, n = "FirebaseError" !== t.name && s < 3;
-                // TODO(schmidt-sebastian): We could probably be smarter about this and
-                // not retry exceptions that are likely unrecoverable (such as quota
-                // exceeded errors).
-                // Note: We cannot use an instanceof check for FirestoreException, since the
-                // exception is wrapped in a generic error by our async/await handling.
-                                if (__PRIVATE_logDebug(U, "Transaction failed with error:", t.message, "Retrying:", n), 
-                this.close(), !n) return Promise.reject(t);
-            }
-        }
-    }
-    close() {
-        this.db && this.db.close(), this.db = void 0;
-    }
-}
-
 /** Parse User Agent to determine Android version. Returns -1 if not found. */ function __PRIVATE_getAndroidVersion(e) {
     const t = e.match(/Android ([\d.]+)/i), n = t ? t[1].split(".").slice(0, 2).join(".") : "-1";
     return Number(n);
-}
-
-/**
- * A controller for iterating over a key range or index. It allows an iterate
- * callback to delete the currently-referenced object, or jump to a new key
- * within the key range or index.
- */ class __PRIVATE_IterationController {
-    constructor(e) {
-        this.$ = e, this.K = false, this.W = null;
-    }
-    get isDone() {
-        return this.K;
-    }
-    get G() {
-        return this.W;
-    }
-    set cursor(e) {
-        this.$ = e;
-    }
-    /**
-     * This function can be called to stop iteration at any point.
-     */    done() {
-        this.K = true;
-    }
-    /**
-     * This function can be called to skip to that next key, which could be
-     * an index or a primary key.
-     */    j(e) {
-        this.W = e;
-    }
-    /**
-     * Delete the current cursor value from the object store.
-     *
-     * NOTE: You CANNOT do this with a keysOnly query.
-     */    delete() {
-        return __PRIVATE_wrapRequest(this.$.delete());
-    }
-}
-
-/** An error that wraps exceptions that thrown during IndexedDB execution. */ class __PRIVATE_IndexedDbTransactionError extends FirestoreError {
-    constructor(e, t) {
-        super(D.UNAVAILABLE, `IndexedDB transaction '${e}' failed: ${t}`), this.name = "IndexedDbTransactionError";
-    }
 }
 
 /** Verifies whether `e` is an IndexedDbTransactionError. */ function __PRIVATE_isIndexedDbTransactionError(e) {
     // Use name equality, as instanceof checks on errors don't work with errors
     // that wrap other errors.
     return "IndexedDbTransactionError" === e.name;
-}
-
-/**
- * A wrapper around an IDBObjectStore providing an API that:
- *
- * 1) Has generic KeyType / ValueType parameters to provide strongly-typed
- * methods for acting against the object store.
- * 2) Deals with IndexedDB's onsuccess / onerror event callbacks, making every
- * method return a PersistencePromise instead.
- * 3) Provides a higher-level API to avoid needing to do excessive wrapping of
- * intermediate IndexedDB types (IDBCursorWithValue, etc.)
- */ class __PRIVATE_SimpleDbStore {
-    constructor(e) {
-        this.store = e;
-    }
-    put(e, t) {
-        let n;
-        return void 0 !== t ? (__PRIVATE_logDebug(U, "PUT", this.store.name, e, t), n = this.store.put(t, e)) : (__PRIVATE_logDebug(U, "PUT", this.store.name, "<auto-key>", e), 
-        n = this.store.put(e)), __PRIVATE_wrapRequest(n);
-    }
-    /**
-     * Adds a new value into an Object Store and returns the new key. Similar to
-     * IndexedDb's `add()`, this method will fail on primary key collisions.
-     *
-     * @param value - The object to write.
-     * @returns The key of the value to add.
-     */    add(e) {
-        __PRIVATE_logDebug(U, "ADD", this.store.name, e, e);
-        return __PRIVATE_wrapRequest(this.store.add(e));
-    }
-    /**
-     * Gets the object with the specified key from the specified store, or null
-     * if no object exists with the specified key.
-     *
-     * @key The key of the object to get.
-     * @returns The object with the specified key or null if no object exists.
-     */    get(e) {
-        // We're doing an unsafe cast to ValueType.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return __PRIVATE_wrapRequest(this.store.get(e)).next((t => (
-        // Normalize nonexistence to null.
-        void 0 === t && (t = null), __PRIVATE_logDebug(U, "GET", this.store.name, e, t), 
-        t)));
-    }
-    delete(e) {
-        __PRIVATE_logDebug(U, "DELETE", this.store.name, e);
-        return __PRIVATE_wrapRequest(this.store.delete(e));
-    }
-    /**
-     * If we ever need more of the count variants, we can add overloads. For now,
-     * all we need is to count everything in a store.
-     *
-     * Returns the number of rows in the store.
-     */    count() {
-        __PRIVATE_logDebug(U, "COUNT", this.store.name);
-        return __PRIVATE_wrapRequest(this.store.count());
-    }
-    H(e, t) {
-        const n = this.options(e, t), r = n.index ? this.store.index(n.index) : this.store;
-        // Use `getAll()` if the browser supports IndexedDB v3, as it is roughly
-        // 20% faster.
-                if ("function" == typeof r.getAll) {
-            const e = r.getAll(n.range);
-            return new PersistencePromise(((t, n) => {
-                e.onerror = e => {
-                    n(e.target.error);
-                }, e.onsuccess = e => {
-                    t(e.target.result);
-                };
-            }));
-        }
-        {
-            const e = this.cursor(n), t = [];
-            return this.J(e, ((e, n) => {
-                t.push(n);
-            })).next((() => t));
-        }
-    }
-    /**
-     * Loads the first `count` elements from the provided index range. Loads all
-     * elements if no limit is provided.
-     */    Y(e, t) {
-        const n = this.store.getAll(e, null === t ? void 0 : t);
-        return new PersistencePromise(((e, t) => {
-            n.onerror = e => {
-                t(e.target.error);
-            }, n.onsuccess = t => {
-                e(t.target.result);
-            };
-        }));
-    }
-    Z(e, t) {
-        __PRIVATE_logDebug(U, "DELETE ALL", this.store.name);
-        const n = this.options(e, t);
-        n.X = false;
-        const r = this.cursor(n);
-        return this.J(r, ((e, t, n) => n.delete()));
-    }
-    ee(e, t) {
-        let n;
-        t ? n = e : (n = {}, t = e);
-        const r = this.cursor(n);
-        return this.J(r, t);
-    }
-    /**
-     * Iterates over a store, but waits for the given callback to complete for
-     * each entry before iterating the next entry. This allows the callback to do
-     * asynchronous work to determine if this iteration should continue.
-     *
-     * The provided callback should return `true` to continue iteration, and
-     * `false` otherwise.
-     */    te(e) {
-        const t = this.cursor({});
-        return new PersistencePromise(((n, r) => {
-            t.onerror = e => {
-                const t = __PRIVATE_checkForAndReportiOSError(e.target.error);
-                r(t);
-            }, t.onsuccess = t => {
-                const r = t.target.result;
-                r ? e(r.primaryKey, r.value).next((e => {
-                    e ? r.continue() : n();
-                })) : n();
-            };
-        }));
-    }
-    J(e, t) {
-        const n = [];
-        return new PersistencePromise(((r, i) => {
-            e.onerror = e => {
-                i(e.target.error);
-            }, e.onsuccess = e => {
-                const i = e.target.result;
-                if (!i) return void r();
-                const s = new __PRIVATE_IterationController(i), _ = t(i.primaryKey, i.value, s);
-                if (_ instanceof PersistencePromise) {
-                    const e = _.catch((e => (s.done(), PersistencePromise.reject(e))));
-                    n.push(e);
-                }
-                s.isDone ? r() : null === s.G ? i.continue() : i.continue(s.G);
-            };
-        })).next((() => PersistencePromise.waitFor(n)));
-    }
-    options(e, t) {
-        let n;
-        return void 0 !== e && ("string" == typeof e ? n = e : t = e), {
-            index: n,
-            range: t
-        };
-    }
-    cursor(e) {
-        let t = "next";
-        if (e.reverse && (t = "prev"), e.index) {
-            const n = this.store.index(e.index);
-            return e.X ? n.openKeyCursor(e.range, t) : n.openCursor(e.range, t);
-        }
-        return this.store.openCursor(e.range, t);
-    }
-}
-
-/**
- * Wraps an IDBRequest in a PersistencePromise, using the onsuccess / onerror
- * handlers to resolve / reject the PersistencePromise as appropriate.
- */ function __PRIVATE_wrapRequest(e) {
-    return new PersistencePromise(((t, n) => {
-        e.onsuccess = e => {
-            const n = e.target.result;
-            t(n);
-        }, e.onerror = e => {
-            const t = __PRIVATE_checkForAndReportiOSError(e.target.error);
-            n(t);
-        };
-    }));
-}
-
-// Guard so we only report the error once.
-let k = false;
-
-function __PRIVATE_checkForAndReportiOSError(e) {
-    const t = __PRIVATE_SimpleDb.O(getUA());
-    if (t >= 12.2 && t < 13) {
-        const t = "An internal error was encountered in the Indexed Database server";
-        if (e.message.indexOf(t) >= 0) {
-            // Wrap error in a more descriptive one.
-            const e = new FirestoreError("internal", `IOS_INDEXEDDB_BUG1: IndexedDb has thrown '${t}'. This is likely due to an unavoidable bug in iOS. See https://stackoverflow.com/q/56496296/110915 for details and a potential workaround.`);
-            return k || (k = true, 
-            // Throw a global exception outside of this promise chain, for the user to
-            // potentially catch.
-            setTimeout((() => {
-                throw e;
-            }), 0)), e;
-        }
-    }
-    return e;
-}
-
-const q = "IndexBackfiller";
-
-/** How long we wait to try running index backfill after SDK initialization. */
-/** This class is responsible for the scheduling of Index Backfiller. */
-class __PRIVATE_IndexBackfillerScheduler {
-    constructor(e, t) {
-        this.asyncQueue = e, this.ne = t, this.task = null;
-    }
-    start() {
-        this.re(15e3);
-    }
-    stop() {
-        this.task && (this.task.cancel(), this.task = null);
-    }
-    get started() {
-        return null !== this.task;
-    }
-    re(e) {
-        __PRIVATE_logDebug(q, `Scheduled in ${e}ms`), this.task = this.asyncQueue.enqueueAfterDelay("index_backfill" /* TimerId.IndexBackfill */ , e, (async () => {
-            this.task = null;
-            try {
-                const e = await this.ne.ie();
-                __PRIVATE_logDebug(q, `Documents written: ${e}`);
-            } catch (e) {
-                __PRIVATE_isIndexedDbTransactionError(e) ? __PRIVATE_logDebug(q, "Ignoring IndexedDB error during index backfill: ", e) : await __PRIVATE_ignoreIfPrimaryLeaseLoss(e);
-            }
-            await this.re(6e4);
-        }));
-    }
-}
-
-/** Implements the steps for backfilling indexes. */ class __PRIVATE_IndexBackfiller {
-    constructor(
-    /**
-     * LocalStore provides access to IndexManager and LocalDocumentView.
-     * These properties will update when the user changes. Consequently,
-     * making a local copy of IndexManager and LocalDocumentView will require
-     * updates over time. The simpler solution is to rely on LocalStore to have
-     * an up-to-date references to IndexManager and LocalDocumentStore.
-     */
-    e, t) {
-        this.localStore = e, this.persistence = t;
-    }
-    async ie(e = 50) {
-        return this.persistence.runTransaction("Backfill Indexes", "readwrite-primary", (t => this.se(t, e)));
-    }
-    /** Writes index entries until the cap is reached. Returns the number of documents processed. */    se(e, t) {
-        const n = new Set;
-        let r = t, i = true;
-        return PersistencePromise.doWhile((() => true === i && r > 0), (() => this.localStore.indexManager.getNextCollectionGroupToUpdate(e).next((t => {
-            if (null !== t && !n.has(t)) return __PRIVATE_logDebug(q, `Processing collection: ${t}`), 
-            this._e(e, t, r).next((e => {
-                r -= e, n.add(t);
-            }));
-            i = false;
-        })))).next((() => t - r));
-    }
-    /**
-     * Writes entries for the provided collection group. Returns the number of documents processed.
-     */    _e(e, t, n) {
-        // Use the earliest offset of all field indexes to query the local cache.
-        return this.localStore.indexManager.getMinOffsetFromCollectionGroup(e, t).next((r => this.localStore.localDocuments.getNextDocuments(e, t, r, n).next((n => {
-            const i = n.changes;
-            return this.localStore.indexManager.updateIndexEntries(e, i).next((() => this.oe(r, n))).next((n => (__PRIVATE_logDebug(q, `Updating offset: ${n}`), 
-            this.localStore.indexManager.updateCollectionGroup(e, t, n)))).next((() => i.size));
-        }))));
-    }
-    /** Returns the next offset based on the provided documents. */    oe(e, t) {
-        let n = e;
-        return t.changes.forEach(((e, t) => {
-            const r = __PRIVATE_newIndexOffsetFromDocument(t);
-            __PRIVATE_indexOffsetComparator(r, n) > 0 && (n = r);
-        })), new IndexOffset(n.readTime, n.documentKey, Math.max(t.batchId, e.largestBatchId));
-    }
 }
 
 /**
@@ -18316,149 +17839,6 @@ function __PRIVATE_encodeResourcePath(e) {
 
 /** Encodes a path separator into the given result */ function __PRIVATE_encodeSeparator(e) {
     return e + K + "";
-}
-
-/**
- * Decodes the given IndexedDb-compatible string form of a resource path into
- * a ResourcePath instance. Note that this method is not suitable for use with
- * decoding resource names from the server; those are One Platform format
- * strings.
- */ function __PRIVATE_decodeResourcePath(e) {
-    // Event the empty path must encode as a path of at least length 2. A path
-    // with exactly 2 must be the empty path.
-    const t = e.length;
-    if (__PRIVATE_hardAssert(t >= 2, 64408, {
-        path: e
-    }), 2 === t) return __PRIVATE_hardAssert(e.charAt(0) === K && "" === e.charAt(1), 56145, {
-        path: e
-    }), ResourcePath.emptyPath();
-    // Escape characters cannot exist past the second-to-last position in the
-    // source value.
-        const __PRIVATE_lastReasonableEscapeIndex = t - 2, n = [];
-    let r = "";
-    for (let i = 0; i < t; ) {
-        // The last two characters of a valid encoded path must be a separator, so
-        // there must be an end to this segment.
-        const t = e.indexOf(K, i);
-        (t < 0 || t > __PRIVATE_lastReasonableEscapeIndex) && fail(50515, {
-            path: e
-        });
-        switch (e.charAt(t + 1)) {
-          case "":
-            const s = e.substring(i, t);
-            let _;
-            0 === r.length ? 
-            // Avoid copying for the common case of a segment that excludes \0
-            // and \001
-            _ = s : (r += s, _ = r, r = ""), n.push(_);
-            break;
-
-          case "":
-            r += e.substring(i, t), r += "\0";
-            break;
-
-          case "":
-            // The escape character can be used in the output to encode itself.
-            r += e.substring(i, t + 1);
-            break;
-
-          default:
-            fail(61167, {
-                path: e
-            });
-        }
-        i = t + 2;
-    }
-    return new ResourcePath(n);
-}
-
-/**
- * @license
- * Copyright 2022 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */ const W = "remoteDocuments", Q = "owner", G = "owner", z = "mutationQueues", j = "userId", H = "mutations", J = "batchId", Y = "userMutationsIndex", Z = [ "userId", "batchId" ];
-
-/**
- * @license
- * Copyright 2022 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-/**
- * Name of the IndexedDb object store.
- *
- * Note that the name 'owner' is chosen to ensure backwards compatibility with
- * older clients that only supported single locked access to the persistence
- * layer.
- */
-/**
- * Creates a [userId, encodedPath] key for use in the DbDocumentMutations
- * index to iterate over all at document mutations for a given path or lower.
- */
-function __PRIVATE_newDbDocumentMutationPrefixForPath(e, t) {
-    return [ e, __PRIVATE_encodeResourcePath(t) ];
-}
-
-/**
- * Creates a full index key of [userId, encodedPath, batchId] for inserting
- * and deleting into the DbDocumentMutations index.
- */ function __PRIVATE_newDbDocumentMutationKey(e, t, n) {
-    return [ e, __PRIVATE_encodeResourcePath(t), n ];
-}
-
-/**
- * Because we store all the useful information for this store in the key,
- * there is no useful information to store as the value. The raw (unencoded)
- * path cannot be stored because IndexedDb doesn't store prototype
- * information.
- */ const X = {}, ee = "documentMutations", te = "remoteDocumentsV14", ne = [ "prefixPath", "collectionGroup", "readTime", "documentId" ], re = "documentKeyIndex", ie = [ "prefixPath", "collectionGroup", "documentId" ], se = "collectionGroupIndex", _e = [ "collectionGroup", "readTime", "prefixPath", "documentId" ], oe = "remoteDocumentGlobal", ae = "remoteDocumentGlobalKey", ue = "targets", ce = "queryTargetsIndex", le = [ "canonicalId", "targetId" ], Ee = "targetDocuments", he = [ "targetId", "path" ], Te = "documentTargetsIndex", Pe = [ "path", "targetId" ], Re = "targetGlobalKey", Ie = "targetGlobal", Ae = "collectionParents", Ve = [ "collectionId", "parent" ], de = "clientMetadata", fe = "clientId", me = "bundles", pe = "bundleId", ge = "namedQueries", ye = "name", we = "indexConfiguration", be = "indexId", ve = "collectionGroupIndex", Se = "collectionGroup", De = "indexState", xe = [ "indexId", "uid" ], Ce = "sequenceNumberIndex", Fe = [ "uid", "sequenceNumber" ], Oe = "indexEntries", Me = [ "indexId", "uid", "arrayValue", "directionalValue", "orderedDocumentKey", "documentKey" ], Ne = "documentKeyIndex", Le = [ "indexId", "uid", "orderedDocumentKey" ], Be = "documentOverlays", Ue = [ "userId", "collectionPath", "documentId" ], ke = "collectionPathOverlayIndex", qe = [ "userId", "collectionPath", "largestBatchId" ], $e = "collectionGroupOverlayIndex", Ke = [ "userId", "collectionGroup", "largestBatchId" ], We = "globals", Qe = "name", Ge = [ ...[ ...[ ...[ ...[ z, H, ee, W, ue, Q, Ie, Ee ], de ], oe ], Ae ], me, ge ], ze = [ ...Ge, Be ], je = [ z, H, ee, te, ue, Q, Ie, Ee, de, oe, Ae, me, ge, Be ], He = je, Je = [ ...He, we, De, Oe ], Ye = Je, Ze = [ ...Je, We ], Xe = Ze;
-
-/**
- * @license
- * Copyright 2020 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-class __PRIVATE_IndexedDbTransaction extends PersistenceTransaction {
-    constructor(e, t) {
-        super(), this.le = e, this.currentSequenceNumber = t;
-    }
-}
-
-function __PRIVATE_getStore(e, t) {
-    const n = __PRIVATE_debugCast(e);
-    return __PRIVATE_SimpleDb.M(n.le, t);
 }
 
 /**
@@ -18924,30 +18304,6 @@ class SortedSetIterator {
 }
 
 /**
- * Compares two sorted sets for equality using their natural ordering. The
- * method computes the intersection and invokes `onAdd` for every element that
- * is in `after` but not `before`. `onRemove` is invoked for every element in
- * `before` but missing from `after`.
- *
- * The method creates a copy of both `before` and `after` and runs in O(n log
- * n), where n is the size of the two lists.
- *
- * @param before - The elements that exist in the original set.
- * @param after - The elements to diff against the original set.
- * @param comparator - The comparator for the elements in before and after.
- * @param onAdd - A function to invoke for every element that is part of `
- * after` but not `before`.
- * @param onRemove - A function to invoke for every element that is part of
- * `before` but not `after`.
- */
-/**
- * Returns the next element from the iterator or `undefined` if none available.
- */
-function __PRIVATE_advanceIterator(e) {
-    return e.hasNext() ? e.getNext() : void 0;
-}
-
-/**
  * @license
  * Copyright 2020 Google LLC
  *
@@ -19370,12 +18726,7 @@ function __PRIVATE_databaseIdFromApp(e, t) {
  * limitations under the License.
  */ const _t = "__type__", ot = "__max__", at = {
     mapValue: {
-        fields: {
-            __type__: {
-                stringValue: ot
-            }
         }
-    }
 }, ut = "__vector__", ct = "value", lt = {
     nullValue: "NULL_VALUE"
 }, Et = {
@@ -19665,12 +19016,6 @@ function __PRIVATE_estimateByteSize(e) {
     }
 }
 
-function __PRIVATE_refValue(e, t) {
-    return {
-        referenceValue: `projects/${e.projectId}/databases/${e.database}/documents/${t.path.canonicalString()}`
-    };
-}
-
 /** Returns true if `value` is an BooleanValue . */
 /** Returns true if `value` is an IntegerValue . */
 function isInteger(e) {
@@ -19750,83 +19095,6 @@ function __PRIVATE_isMapValue(e) {
 
 /** Returns true if the Value represents the canonical {@link #MAX_VALUE} . */ function __PRIVATE_isMaxValue(e) {
     return (((e.mapValue || {}).fields || {}).__type__ || {}).stringValue === ot;
-}
-
-const Tt = {
-    mapValue: {
-        fields: {
-            [_t]: {
-                stringValue: ut
-            },
-            [ct]: {
-                arrayValue: {}
-            }
-        }
-    }
-};
-
-/** Returns the lowest value for the given value type (inclusive). */ function __PRIVATE_valuesGetLowerBound(e) {
-    return "nullValue" in e ? lt : "booleanValue" in e ? {
-        booleanValue: false
-    } : "integerValue" in e || "doubleValue" in e ? {
-        doubleValue: NaN
-    } : "timestampValue" in e ? {
-        timestampValue: {
-            seconds: Number.MIN_SAFE_INTEGER
-        }
-    } : "stringValue" in e ? {
-        stringValue: ""
-    } : "bytesValue" in e ? {
-        bytesValue: ""
-    } : "referenceValue" in e ? __PRIVATE_refValue(DatabaseId.empty(), DocumentKey.empty()) : "geoPointValue" in e ? {
-        geoPointValue: {
-            latitude: -90,
-            longitude: -180
-        }
-    } : "arrayValue" in e ? {
-        arrayValue: {}
-    } : "mapValue" in e ? __PRIVATE_isVectorValue(e) ? Tt : {
-        mapValue: {}
-    } : fail(35942, {
-        value: e
-    });
-}
-
-/** Returns the largest value for the given value type (exclusive). */ function __PRIVATE_valuesGetUpperBound(e) {
-    return "nullValue" in e ? {
-        booleanValue: false
-    } : "booleanValue" in e ? {
-        doubleValue: NaN
-    } : "integerValue" in e || "doubleValue" in e ? {
-        timestampValue: {
-            seconds: Number.MIN_SAFE_INTEGER
-        }
-    } : "timestampValue" in e ? {
-        stringValue: ""
-    } : "stringValue" in e ? {
-        bytesValue: ""
-    } : "bytesValue" in e ? __PRIVATE_refValue(DatabaseId.empty(), DocumentKey.empty()) : "referenceValue" in e ? {
-        geoPointValue: {
-            latitude: -90,
-            longitude: -180
-        }
-    } : "geoPointValue" in e ? {
-        arrayValue: {}
-    } : "arrayValue" in e ? Tt : "mapValue" in e ? __PRIVATE_isVectorValue(e) ? {
-        mapValue: {}
-    } : at : fail(61959, {
-        value: e
-    });
-}
-
-function __PRIVATE_lowerBoundCompare(e, t) {
-    const n = __PRIVATE_valueCompare(e.value, t.value);
-    return 0 !== n ? n : e.inclusive && !t.inclusive ? -1 : !e.inclusive && t.inclusive ? 1 : 0;
-}
-
-function __PRIVATE_upperBoundCompare(e, t) {
-    const n = __PRIVATE_valueCompare(e.value, t.value);
-    return 0 !== n ? n : e.inclusive && !t.inclusive ? 1 : !e.inclusive && t.inclusive ? -1 : 0;
 }
 
 /**
@@ -20172,28 +19440,6 @@ function asNumber(e) {
 
 function __PRIVATE_coercedFieldValuesArray(e) {
     return isArray(e) && e.arrayValue.values ? e.arrayValue.values.slice() : [];
-}
-
-/**
- * @license
- * Copyright 2017 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-/** A field path and the TransformOperation to perform upon it. */ class FieldTransform {
-    constructor(e, t) {
-        this.field = e, this.transform = t;
-    }
 }
 
 function __PRIVATE_fieldTransformEquals(e, t) {
@@ -20708,10 +19954,6 @@ function __PRIVATE_compositeFilterIsConjunction(e) {
     return "and" /* CompositeOperator.AND */ === e.op;
 }
 
-function __PRIVATE_compositeFilterIsDisjunction(e) {
-    return "or" /* CompositeOperator.OR */ === e.op;
-}
-
 /**
  * Returns true if this filter is a conjunction of field filters only. Returns false otherwise.
  */ function __PRIVATE_compositeFilterIsFlatConjunction(e) {
@@ -20759,11 +20001,6 @@ function __PRIVATE_filterEquals(e, t) {
  * Returns a new composite filter that contains all filter from
  * `compositeFilter` plus all the given filters in `otherFilters`.
  */ (e, t) : void fail(19439);
-}
-
-function __PRIVATE_compositeFilterWithAddedFilters(e, t) {
-    const n = e.filters.concat(t);
-    return CompositeFilter.create(n, e.op);
 }
 
 /** Returns a debug description for `filter`. */ function __PRIVATE_stringifyFilter(e) {
@@ -21081,135 +20318,6 @@ function __PRIVATE_targetEquals(e, t) {
 function __PRIVATE_targetIsPipelineTarget(e) {
     // Workaround for circular dependency
     return !!e.isCorePipeline;
-}
-
-function __PRIVATE_targetIsDocumentTarget(e) {
-    return !!e.path && DocumentKey.isDocumentKey(e.path) && null === e.collectionGroup && 0 === e.filters.length;
-}
-
-/** Returns the field filters that target the given field path. */ function __PRIVATE_targetGetFieldFiltersForPath(e, t) {
-    return e.filters.filter((e => e instanceof FieldFilter && e.field.isEqual(t)));
-}
-
-/**
- * Returns the values that are used in ARRAY_CONTAINS or ARRAY_CONTAINS_ANY
- * filters. Returns `null` if there are no such filters.
- */
-/**
- * Returns the value to use as the lower bound for ascending index segment at
- * the provided `fieldPath` (or the upper bound for an descending segment).
- */
-function __PRIVATE_targetGetAscendingBound(e, t, n) {
-    let r = lt, i = true;
-    // Process all filters to find a value for the current field segment
-    for (const n of __PRIVATE_targetGetFieldFiltersForPath(e, t)) {
-        let e = lt, t = true;
-        switch (n.op) {
-          case "<" /* Operator.LESS_THAN */ :
-          case "<=" /* Operator.LESS_THAN_OR_EQUAL */ :
-            e = __PRIVATE_valuesGetLowerBound(n.value);
-            break;
-
-          case "==" /* Operator.EQUAL */ :
-          case "in" /* Operator.IN */ :
-          case ">=" /* Operator.GREATER_THAN_OR_EQUAL */ :
-            e = n.value;
-            break;
-
-          case ">" /* Operator.GREATER_THAN */ :
-            e = n.value, t = false;
-            break;
-
-          case "!=" /* Operator.NOT_EQUAL */ :
-          case "not-in" /* Operator.NOT_IN */ :
-            e = lt;
- // Remaining filters cannot be used as lower bounds.
-                }
-        __PRIVATE_lowerBoundCompare({
-            value: r,
-            inclusive: i
-        }, {
-            value: e,
-            inclusive: t
-        }) < 0 && (r = e, i = t);
-    }
-    // If there is an additional bound, compare the values against the existing
-    // range to see if we can narrow the scope.
-        if (null !== n) for (let s = 0; s < e.orderBy.length; ++s) {
-        if (e.orderBy[s].field.isEqual(t)) {
-            const e = n.position[s];
-            __PRIVATE_lowerBoundCompare({
-                value: r,
-                inclusive: i
-            }, {
-                value: e,
-                inclusive: n.inclusive
-            }) < 0 && (r = e, i = n.inclusive);
-            break;
-        }
-    }
-    return {
-        value: r,
-        inclusive: i
-    };
-}
-
-/**
- * Returns the value to use as the upper bound for ascending index segment at
- * the provided `fieldPath` (or the lower bound for a descending segment).
- */ function __PRIVATE_targetGetDescendingBound(e, t, n) {
-    let r = at, i = true;
-    // Process all filters to find a value for the current field segment
-    for (const n of __PRIVATE_targetGetFieldFiltersForPath(e, t)) {
-        let e = at, t = true;
-        switch (n.op) {
-          case ">=" /* Operator.GREATER_THAN_OR_EQUAL */ :
-          case ">" /* Operator.GREATER_THAN */ :
-            e = __PRIVATE_valuesGetUpperBound(n.value), t = false;
-            break;
-
-          case "==" /* Operator.EQUAL */ :
-          case "in" /* Operator.IN */ :
-          case "<=" /* Operator.LESS_THAN_OR_EQUAL */ :
-            e = n.value;
-            break;
-
-          case "<" /* Operator.LESS_THAN */ :
-            e = n.value, t = false;
-            break;
-
-          case "!=" /* Operator.NOT_EQUAL */ :
-          case "not-in" /* Operator.NOT_IN */ :
-            e = at;
- // Remaining filters cannot be used as upper bounds.
-                }
-        __PRIVATE_upperBoundCompare({
-            value: r,
-            inclusive: i
-        }, {
-            value: e,
-            inclusive: t
-        }) > 0 && (r = e, i = t);
-    }
-    // If there is an additional bound, compare the values against the existing
-    // range to see if we can narrow the scope.
-        if (null !== n) for (let s = 0; s < e.orderBy.length; ++s) {
-        if (e.orderBy[s].field.isEqual(t)) {
-            const e = n.position[s];
-            __PRIVATE_upperBoundCompare({
-                value: r,
-                inclusive: i
-            }, {
-                value: e,
-                inclusive: n.inclusive
-            }) > 0 && (r = e, i = n.inclusive);
-            break;
-        }
-    }
-    return {
-        value: r,
-        inclusive: i
-    };
 }
 
 /** Returns the number of segments of a perfect index for this target. */
@@ -21787,34 +20895,6 @@ function __PRIVATE_targetIdSet() {
  */
 new Integer([ 4294967295, 4294967295 ], 0);
 
-const yt = (() => {
-    const e = {
-        asc: "ASCENDING",
-        desc: "DESCENDING"
-    };
-    return e;
-})(), wt = (() => {
-    const e = {
-        "<": "LESS_THAN",
-        "<=": "LESS_THAN_OR_EQUAL",
-        ">": "GREATER_THAN",
-        ">=": "GREATER_THAN_OR_EQUAL",
-        "==": "EQUAL",
-        "!=": "NOT_EQUAL",
-        "array-contains": "ARRAY_CONTAINS",
-        in: "IN",
-        "not-in": "NOT_IN",
-        "array-contains-any": "ARRAY_CONTAINS_ANY"
-    };
-    return e;
-})(), bt = (() => {
-    const e = {
-        and: "AND",
-        or: "OR"
-    };
-    return e;
-})();
-
 /**
  * This class generates JsonObject values for the Datastore API suitable for
  * sending to either GRPC stub methods or via the JSON/HTTP REST API.
@@ -21833,20 +20913,6 @@ class JsonProtoSerializer {
     constructor(e, t) {
         this.databaseId = e, this.useProto3Json = t;
     }
-}
-
-/**
- * Returns a value for a number (or null) that's appropriate to put into
- * a google.protobuf.Int32Value proto.
- * DO NOT USE THIS FOR ANYTHING ELSE.
- * This method cheats. It's typed as returning "number" because that's what
- * our generated proto interfaces say Int32Value must be. But GRPC actually
- * expects a { value: <number> } struct.
- */
-function __PRIVATE_toInt32Proto(e, t) {
-    return e.useProto3Json || __PRIVATE_isNullOrUndefined(t) ? t : {
-        value: t
-    };
 }
 
 /**
@@ -21912,17 +20978,6 @@ function __PRIVATE_toName(e, t) {
     return __PRIVATE_toResourceName(e.databaseId, t.path);
 }
 
-function fromName(e, t) {
-    const n = __PRIVATE_fromResourceName(t);
-    if (n.get(1) !== e.databaseId.projectId) throw new FirestoreError(D.INVALID_ARGUMENT, "Tried to deserialize key from different project: " + n.get(1) + " vs " + e.databaseId.projectId);
-    if (n.get(3) !== e.databaseId.database) throw new FirestoreError(D.INVALID_ARGUMENT, "Tried to deserialize key from different database: " + n.get(3) + " vs " + e.databaseId.database);
-    return new DocumentKey(__PRIVATE_extractLocalPathFromResourceName(n));
-}
-
-function __PRIVATE_toQueryPath(e, t) {
-    return __PRIVATE_toResourceName(e.databaseId, t);
-}
-
 function __PRIVATE_fromQueryPath(e) {
     const t = __PRIVATE_fromResourceName(e);
     // In v1beta1 queries for collections at the root did not have a trailing
@@ -21947,15 +21002,6 @@ function __PRIVATE_extractLocalPathFromResourceName(e) {
         name: __PRIVATE_toName(e, t),
         fields: n.value.mapValue.fields
     };
-}
-
-function fromDocument(e, t, n) {
-    const r = fromName(e, t.name), i = __PRIVATE_fromVersion(t.updateTime), s = t.createTime ? __PRIVATE_fromVersion(t.createTime) : SnapshotVersion.min(), _ = new ObjectValue({
-        mapValue: {
-            fields: t.fields
-        }
-    }), o = MutableDocument.newFoundDocument(r, i, s, _);
-    return n && o.setHasCommittedMutations(), n ? o.setHasCommittedMutations() : o;
 }
 
 function toMutation(e, t) {
@@ -22017,54 +21063,6 @@ function toMutation(e, t) {
     }(e, t.precondition)), n;
 }
 
-function __PRIVATE_fromMutation(e, t) {
-    const n = t.currentDocument ? function __PRIVATE_fromPrecondition(e) {
-        return void 0 !== e.updateTime ? Precondition.updateTime(__PRIVATE_fromVersion(e.updateTime)) : void 0 !== e.exists ? Precondition.exists(e.exists) : Precondition.none();
-    }(t.currentDocument) : Precondition.none(), r = t.updateTransforms ? t.updateTransforms.map((t => function __PRIVATE_fromFieldTransform(e, t) {
-        let n = null;
-        if ("setToServerValue" in t) __PRIVATE_hardAssert("REQUEST_TIME" === t.setToServerValue, 16630, {
-            proto: t
-        }), n = new __PRIVATE_ServerTimestampTransform; else if ("appendMissingElements" in t) {
-            const e = t.appendMissingElements.values || [];
-            n = new __PRIVATE_ArrayUnionTransformOperation(e);
-        } else if ("removeAllFromArray" in t) {
-            const e = t.removeAllFromArray.values || [];
-            n = new __PRIVATE_ArrayRemoveTransformOperation(e);
-        } else "increment" in t ? n = new __PRIVATE_NumericIncrementTransformOperation(e, t.increment) : "minimum" in t ? n = new __PRIVATE_NumericMinimumTransformOperation(e, t.minimum) : "maximum" in t ? n = new __PRIVATE_NumericMaximumTransformOperation(e, t.maximum) : fail(16584, {
-            proto: t
-        });
-        const r = FieldPath$1.fromServerFormat(t.fieldPath);
-        return new FieldTransform(r, n);
-    }(e, t))) : [];
-    if (t.update) {
-        t.update.name;
-        const i = fromName(e, t.update.name), s = new ObjectValue({
-            mapValue: {
-                fields: t.update.fields
-            }
-        });
-        if (t.updateMask) {
-            const e = function __PRIVATE_fromDocumentMask(e) {
-                const t = e.fieldPaths || [];
-                return new FieldMask(t.map((e => FieldPath$1.fromServerFormat(e))));
-            }(t.updateMask);
-            return new __PRIVATE_PatchMutation(i, s, e, n, r);
-        }
-        return new __PRIVATE_SetMutation(i, s, n, r);
-    }
-    if (t.delete) {
-        const r = fromName(e, t.delete);
-        return new __PRIVATE_DeleteMutation(r, n);
-    }
-    if (t.verify) {
-        const r = fromName(e, t.verify);
-        return new __PRIVATE_VerifyMutation(r, n);
-    }
-    return fail(1463, {
-        proto: t
-    });
-}
-
 function __PRIVATE_fromWriteResults(e, t) {
     return e && e.length > 0 ? (__PRIVATE_hardAssert(void 0 !== t, 14353), e.map((e => function __PRIVATE_fromWriteResult(e, t) {
         // NOTE: Deletes don't have an updateTime.
@@ -22077,58 +21075,6 @@ function __PRIVATE_fromWriteResults(e, t) {
         // TODO(#2149): Remove this when Emulator is fixed
         n = __PRIVATE_fromVersion(t)), new MutationResult(n, e.transformResults || []);
     }(e, t)))) : [];
-}
-
-function __PRIVATE_toDocumentsTarget(e, t) {
-    return {
-        documents: [ __PRIVATE_toQueryPath(e, t.path) ]
-    };
-}
-
-function __PRIVATE_toQueryTarget(e, t) {
-    // Dissect the path into parent, collectionId, and optional key filter.
-    const n = {
-        structuredQuery: {}
-    }, r = t.path;
-    let i;
-    null !== t.collectionGroup ? (i = r, n.structuredQuery.from = [ {
-        collectionId: t.collectionGroup,
-        allDescendants: true
-    } ]) : (i = r.popLast(), n.structuredQuery.from = [ {
-        collectionId: r.lastSegment()
-    } ]), n.parent = __PRIVATE_toQueryPath(e, i);
-    const s = function __PRIVATE_toFilters(e) {
-        if (0 === e.length) return;
-        return __PRIVATE_toFilter(CompositeFilter.create(e, "and" /* CompositeOperator.AND */));
-    }(t.filters);
-    s && (n.structuredQuery.where = s);
-    const _ = function __PRIVATE_toOrder(e) {
-        if (0 === e.length) return;
-        return e.map((e => 
-        // visible for testing
-        function __PRIVATE_toPropertyOrder(e) {
-            return {
-                field: __PRIVATE_toFieldPathReference(e.field),
-                direction: __PRIVATE_toDirection(e.dir)
-            };
-        }(e)));
-    }(t.orderBy);
-    _ && (n.structuredQuery.orderBy = _);
-    const o = __PRIVATE_toInt32Proto(e, t.limit);
-    return null !== o && (n.structuredQuery.limit = o), t.startAt && (n.structuredQuery.startAt = function __PRIVATE_toStartAtCursor(e) {
-        return {
-            before: e.inclusive,
-            values: e.position
-        };
-    }(t.startAt)), t.endAt && (n.structuredQuery.endAt = function __PRIVATE_toEndAtCursor(e) {
-        return {
-            before: !e.inclusive,
-            values: e.position
-        };
-    }(t.endAt)), {
-        yt: n,
-        parent: i
-    };
 }
 
 function __PRIVATE_convertQueryTargetToQuery(e) {
@@ -22186,16 +21132,6 @@ function __PRIVATE_convertQueryTargetToQuery(e) {
     }
     // visible for testing
     (n.endAt)), __PRIVATE_newQuery(t, i, _, s, o, "F" /* LimitType.First */ , a, u);
-}
-
-function __PRIVATE_toPipelineTarget(e, t) {
-    return {
-        structuredPipeline: {
-            pipeline: {
-                stages: t.stages.map((t => t._toProto(e)))
-            }
-        }
-    };
 }
 
 function __PRIVATE_fromFilter(e) {
@@ -22289,76 +21225,8 @@ function __PRIVATE_fromFilter(e) {
     });
 }
 
-function __PRIVATE_toDirection(e) {
-    return yt[e];
-}
-
-function __PRIVATE_toOperatorName(e) {
-    return wt[e];
-}
-
-function __PRIVATE_toCompositeOperatorName(e) {
-    return bt[e];
-}
-
-function __PRIVATE_toFieldPathReference(e) {
-    return {
-        fieldPath: e.canonicalString()
-    };
-}
-
 function __PRIVATE_fromFieldPathReference(e) {
     return FieldPath$1.fromServerFormat(e.fieldPath);
-}
-
-function __PRIVATE_toFilter(e) {
-    return e instanceof FieldFilter ? function __PRIVATE_toUnaryOrFieldFilter(e) {
-        if ("==" /* Operator.EQUAL */ === e.op) {
-            if (__PRIVATE_isNanValue(e.value)) return {
-                unaryFilter: {
-                    field: __PRIVATE_toFieldPathReference(e.field),
-                    op: "IS_NAN"
-                }
-            };
-            if (__PRIVATE_isNullValue(e.value)) return {
-                unaryFilter: {
-                    field: __PRIVATE_toFieldPathReference(e.field),
-                    op: "IS_NULL"
-                }
-            };
-        } else if ("!=" /* Operator.NOT_EQUAL */ === e.op) {
-            if (__PRIVATE_isNanValue(e.value)) return {
-                unaryFilter: {
-                    field: __PRIVATE_toFieldPathReference(e.field),
-                    op: "IS_NOT_NAN"
-                }
-            };
-            if (__PRIVATE_isNullValue(e.value)) return {
-                unaryFilter: {
-                    field: __PRIVATE_toFieldPathReference(e.field),
-                    op: "IS_NOT_NULL"
-                }
-            };
-        }
-        return {
-            fieldFilter: {
-                field: __PRIVATE_toFieldPathReference(e.field),
-                op: __PRIVATE_toOperatorName(e.op),
-                value: e.value
-            }
-        };
-    }(e) : e instanceof CompositeFilter ? function __PRIVATE_toCompositeFilter(e) {
-        const t = e.getFilters().map((e => __PRIVATE_toFilter(e)));
-        if (1 === t.length) return t[0];
-        return {
-            compositeFilter: {
-                op: __PRIVATE_toCompositeOperatorName(e.op),
-                filters: t
-            }
-        };
-    }(e) : fail(54877, {
-        filter: e
-    });
 }
 
 function __PRIVATE_toDocumentMask(e) {
@@ -29396,219 +28264,10 @@ function __PRIVATE_targetOrPipelineEqual(e, t) {
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/**
- * An immutable set of metadata that the local store tracks for each target.
- */ class TargetData {
-    constructor(
-    /** The target being listened to. */
-    e, 
-    /**
-     * The target ID to which the target corresponds; Assigned by the
-     * LocalStore for user listens and by the SyncEngine for limbo watches.
-     */
-    t, 
-    /** The purpose of the target. */
-    n, 
-    /**
-     * The sequence number of the last transaction during which this target data
-     * was modified.
-     */
-    r, 
-    /** The latest snapshot version seen for this target. */
-    i = SnapshotVersion.min()
-    /**
-     * The maximum snapshot version at which the associated view
-     * contained no limbo documents.
-     */ , s = SnapshotVersion.min()
-    /**
-     * An opaque, server-assigned token that allows watching a target to be
-     * resumed after disconnecting without retransmitting all the data that
-     * matches the target. The resume token essentially identifies a point in
-     * time from which the server should resume sending results.
-     */ , _ = ByteString.EMPTY_BYTE_STRING
-    /**
-     * The number of documents that last matched the query at the resume token or
-     * read time. Documents are counted only when making a listen request with
-     * resume token or read time, otherwise, keep it null.
-     */ , o = null) {
-        this.target = e, this.targetId = t, this.purpose = n, this.sequenceNumber = r, this.snapshotVersion = i, 
-        this.lastLimboFreeSnapshotVersion = s, this.resumeToken = _, this.expectedCount = o;
-    }
-    /** Creates a new target data instance with an updated sequence number. */    withSequenceNumber(e) {
-        return new TargetData(this.target, this.targetId, this.purpose, e, this.snapshotVersion, this.lastLimboFreeSnapshotVersion, this.resumeToken, this.expectedCount);
-    }
-    /**
-     * Creates a new target data instance with an updated resume token and
-     * snapshot version.
-     */    withResumeToken(e, t) {
-        return new TargetData(this.target, this.targetId, this.purpose, this.sequenceNumber, t, this.lastLimboFreeSnapshotVersion, e, 
-        /* expectedCount= */ null);
-    }
-    /**
-     * Creates a new target data instance with an updated expected count.
-     */    withExpectedCount(e) {
-        return new TargetData(this.target, this.targetId, this.purpose, this.sequenceNumber, this.snapshotVersion, this.lastLimboFreeSnapshotVersion, this.resumeToken, e);
-    }
-    /**
-     * Creates a new target data instance with an updated last limbo free
-     * snapshot version number.
-     */    withLastLimboFreeSnapshotVersion(e) {
-        return new TargetData(this.target, this.targetId, this.purpose, this.sequenceNumber, this.snapshotVersion, e, this.resumeToken, this.expectedCount);
-    }
-}
-
-/**
- * @license
- * Copyright 2017 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
 /** Serializer for values stored in the LocalStore. */ class __PRIVATE_LocalSerializer {
     constructor(e) {
         this.zr = e;
     }
-}
-
-/** Decodes a remote document from storage locally to a Document. */ function __PRIVATE_fromDbRemoteDocument(e, t) {
-    let n;
-    if (t.document) n = fromDocument(e.zr, t.document, !!t.hasCommittedMutations); else if (t.noDocument) {
-        const e = DocumentKey.fromSegments(t.noDocument.path), r = __PRIVATE_fromDbTimestamp(t.noDocument.readTime);
-        n = MutableDocument.newNoDocument(e, r), t.hasCommittedMutations && n.setHasCommittedMutations();
-    } else {
-        if (!t.unknownDocument) return fail(56709);
-        {
-            const e = DocumentKey.fromSegments(t.unknownDocument.path), r = __PRIVATE_fromDbTimestamp(t.unknownDocument.version);
-            n = MutableDocument.newUnknownDocument(e, r);
-        }
-    }
-    return t.readTime && n.setReadTime(function __PRIVATE_fromDbTimestampKey(e) {
-        const t = new Timestamp(e[0], e[1]);
-        return SnapshotVersion.fromTimestamp(t);
-    }(t.readTime)), n;
-}
-
-/** Encodes a document for storage locally. */ function __PRIVATE_toDbRemoteDocument(e, t) {
-    const n = t.key, r = {
-        prefixPath: n.getCollectionPath().popLast().toArray(),
-        collectionGroup: n.collectionGroup,
-        documentId: n.path.lastSegment(),
-        readTime: __PRIVATE_toDbTimestampKey(t.readTime),
-        hasCommittedMutations: t.hasCommittedMutations
-    };
-    if (t.isFoundDocument()) r.document = function __PRIVATE_toDocument(e, t) {
-        return {
-            name: __PRIVATE_toName(e, t.key),
-            fields: t.data.value.mapValue.fields,
-            updateTime: toTimestamp(e, t.version.toTimestamp()),
-            createTime: toTimestamp(e, t.createTime.toTimestamp())
-        };
-    }(e.zr, t); else if (t.isNoDocument()) r.noDocument = {
-        path: n.path.toArray(),
-        readTime: __PRIVATE_toDbTimestamp(t.version)
-    }; else {
-        if (!t.isUnknownDocument()) return fail(57904, {
-            document: t
-        });
-        r.unknownDocument = {
-            path: n.path.toArray(),
-            version: __PRIVATE_toDbTimestamp(t.version)
-        };
-    }
-    return r;
-}
-
-function __PRIVATE_toDbTimestampKey(e) {
-    const t = e.toTimestamp();
-    return [ t.seconds, t.nanoseconds ];
-}
-
-function __PRIVATE_toDbTimestamp(e) {
-    const t = e.toTimestamp();
-    return {
-        seconds: t.seconds,
-        nanoseconds: t.nanoseconds
-    };
-}
-
-function __PRIVATE_fromDbTimestamp(e) {
-    const t = new Timestamp(e.seconds, e.nanoseconds);
-    return SnapshotVersion.fromTimestamp(t);
-}
-
-/** Encodes a batch of mutations into a DbMutationBatch for local storage. */
-/** Decodes a DbMutationBatch into a MutationBatch */
-function __PRIVATE_fromDbMutationBatch(e, t) {
-    const n = (t.baseMutations || []).map((t => __PRIVATE_fromMutation(e.zr, t)));
-    // Squash old transform mutations into existing patch or set mutations.
-    // The replacement of representing `transforms` with `update_transforms`
-    // on the SDK means that old `transform` mutations stored in IndexedDB need
-    // to be updated to `update_transforms`.
-    // TODO(b/174608374): Remove this code once we perform a schema migration.
-        for (let e = 0; e < t.mutations.length - 1; ++e) {
-        const n = t.mutations[e];
-        if (e + 1 < t.mutations.length && void 0 !== t.mutations[e + 1].transform) {
-            const r = t.mutations[e + 1];
-            n.updateTransforms = r.transform.fieldTransforms, t.mutations.splice(e + 1, 1), 
-            ++e;
-        }
-    }
-    const r = t.mutations.map((t => __PRIVATE_fromMutation(e.zr, t))), i = Timestamp.fromMillis(t.localWriteTimeMs);
-    return new MutationBatch(t.batchId, i, n, r);
-}
-
-/** Decodes a DbTarget into TargetData */ function __PRIVATE_fromDbTarget(e, t) {
-    const n = __PRIVATE_fromDbTimestamp(t.readTime), r = void 0 !== t.lastLimboFreeSnapshotVersion ? __PRIVATE_fromDbTimestamp(t.lastLimboFreeSnapshotVersion) : SnapshotVersion.min();
-    let i;
-    return i = function __PRIVATE_isPipelineQueryTarget(e) {
-        return void 0 !== e.structuredPipeline;
-    }
-    /**
- * A helper function for figuring out what kind of query has been stored.
- */ (t.query) ? function __PRIVATE_fromPipelineTarget(e, t) {
-        const n = e.structuredPipeline;
-        __PRIVATE_hardAssert((n?.pipeline?.stages ?? []).length > 0, 1845);
-        const r = n?.pipeline?.stages.map(__PRIVATE_stageFromProto);
-        return new CorePipeline(t, r);
-    }(t.query, e.zr) : function __PRIVATE_isDocumentQuery(e) {
-        return void 0 !== e.documents;
-    }
-    /** Encodes a DbBundle to a BundleMetadata object. */ (t.query) ? function __PRIVATE_fromDocumentsTarget(e) {
-        const t = e.documents.length;
-        return __PRIVATE_hardAssert(1 === t, 1966, {
-            count: t
-        }), __PRIVATE_queryToTarget(__PRIVATE_newQueryForPath(__PRIVATE_fromQueryPath(e.documents[0])));
-    }(t.query) : function __PRIVATE_fromQueryTarget(e) {
-        return __PRIVATE_queryToTarget(__PRIVATE_convertQueryTargetToQuery(e));
-    }(t.query), new TargetData(i, t.targetId, "TargetPurposeListen" /* TargetPurpose.Listen */ , t.lastListenSequenceNumber, n, r, ByteString.fromBase64String(t.resumeToken));
-}
-
-/** Encodes TargetData into a DbTarget for storage locally. */ function __PRIVATE_toDbTarget(e, t) {
-    const n = __PRIVATE_toDbTimestamp(t.snapshotVersion), r = __PRIVATE_toDbTimestamp(t.lastLimboFreeSnapshotVersion);
-    let i;
-    i = __PRIVATE_targetIsPipelineTarget(t.target) ? __PRIVATE_toPipelineTarget(e.zr, t.target) : __PRIVATE_targetIsDocumentTarget(t.target) ? __PRIVATE_toDocumentsTarget(e.zr, t.target) : __PRIVATE_toQueryTarget(e.zr, t.target).yt;
-    // We can't store the resumeToken as a ByteString in IndexedDb, so we
-    // convert it to a base64 string for storage.
-        const s = t.resumeToken.toBase64();
-    // lastListenSequenceNumber is always 0 until we do real GC.
-        return {
-        targetId: t.targetId,
-        canonicalId: __PRIVATE_canonifyTargetOrPipeline(t.target),
-        readTime: n,
-        resumeToken: s,
-        lastListenSequenceNumber: t.sequenceNumber,
-        lastLimboFreeSnapshotVersion: r,
-        query: i
-    };
 }
 
 /**
@@ -29623,1074 +28282,6 @@ function __PRIVATE_fromBundledQuery(e) {
         structuredQuery: e.structuredQuery
     });
     return "LAST" === e.limitType ? __PRIVATE_queryWithLimit(t, t.limit, "L" /* LimitType.Last */) : t;
-}
-
-/** Encodes a NamedQuery proto object to a NamedQuery model object. */
-/** Encodes a DbDocumentOverlay object to an Overlay model object. */
-function __PRIVATE_fromDbDocumentOverlay(e, t) {
-    return new Overlay(t.largestBatchId, __PRIVATE_fromMutation(e.zr, t.overlayMutation));
-}
-
-/** Decodes an Overlay model object into a DbDocumentOverlay object. */
-/**
- * Returns the DbDocumentOverlayKey corresponding to the given user and
- * document key.
- */
-function __PRIVATE_toDbDocumentOverlayKey(e, t) {
-    const n = t.path.lastSegment();
-    return [ e, __PRIVATE_encodeResourcePath(t.path.popLast()), n ];
-}
-
-function __PRIVATE_toDbIndexState(e, t, n, r) {
-    return {
-        indexId: e,
-        uid: t,
-        sequenceNumber: n,
-        readTime: __PRIVATE_toDbTimestamp(r.readTime),
-        documentKey: __PRIVATE_encodeResourcePath(r.documentKey.path),
-        largestBatchId: r.largestBatchId
-    };
-}
-
-function __PRIVATE_stageFromProto(e) {
-    switch (e.name) {
-      case "collection":
-        return new __PRIVATE_CollectionSource(e.args[0].referenceValue, {});
-
-      case "collection_group":
-        return new __PRIVATE_CollectionGroupSource(e.args[1].stringValue, {});
-
-      case "database":
-        return new __PRIVATE_DatabaseSource({});
-
-      case "documents":
-        return new __PRIVATE_DocumentsSource(e.args.map((e => e.referenceValue)), {});
-
-      case "where":
-        return new __PRIVATE_Where(__PRIVATE_exprFromProto(e.args[0]), {});
-
-      case "limit":
-        {
-            const t = e.args[0].integerValue ?? e.args[0].doubleValue;
-            return new __PRIVATE_Limit("number" == typeof t ? t : Number(t), {});
-        }
-
-      case "sort":
-        return new __PRIVATE_Sort(e.args.map((e => function __PRIVATE_orderingFromProto(e) {
-            const t = e.mapValue?.fields;
-            return new Ordering(__PRIVATE_exprFromProto(t.expression), t.direction?.stringValue, "orderingFromProto");
-        }
-        /**
- * @license
- * Copyright 2020 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */ (e))), {});
-
-      default:
-        throw new Error(`Stage type: ${e.name} not supported.`);
-    }
-}
-
-function __PRIVATE_exprFromProto(e) {
-    return e.fieldReferenceValue ? new Field(__PRIVATE_fieldPathFromArgument("_exprFromProto", e.fieldReferenceValue), "_exprFromProto") : e.functionValue ? function __PRIVATE_functionFromProto(e) {
-        // TODO(pipeline): When aggregation is supported, we need to return AggregateFunction for the functions
-        // with aggregate names (sum, count, etc).
-        return new FunctionExpression(e.functionValue.name, e.functionValue.args?.map(__PRIVATE_exprFromProto) || []);
-    }(e) : Constant._fromProto(e);
-}
-
-class __PRIVATE_IndexedDbBundleCache {
-    getBundleMetadata(e, t) {
-        return __PRIVATE_bundlesStore(e).get(t).next((e => {
-            if (e) return function __PRIVATE_fromDbBundle(e) {
-                return {
-                    id: e.bundleId,
-                    createTime: __PRIVATE_fromDbTimestamp(e.createTime),
-                    version: e.version
-                };
-            }
-            /** Encodes a BundleMetadata to a DbBundle. */ (e);
-        }));
-    }
-    saveBundleMetadata(e, t) {
-        return __PRIVATE_bundlesStore(e).put(function __PRIVATE_toDbBundle(e) {
-            return {
-                bundleId: e.id,
-                createTime: __PRIVATE_toDbTimestamp(__PRIVATE_fromVersion(e.createTime)),
-                version: e.version
-            };
-        }
-        /** Encodes a DbNamedQuery to a NamedQuery. */ (t));
-    }
-    getNamedQuery(e, t) {
-        return __PRIVATE_namedQueriesStore(e).get(t).next((e => {
-            if (e) return function __PRIVATE_fromDbNamedQuery(e) {
-                return {
-                    name: e.name,
-                    query: __PRIVATE_fromBundledQuery(e.bundledQuery),
-                    readTime: __PRIVATE_fromDbTimestamp(e.readTime)
-                };
-            }
-            /** Encodes a NamedQuery from a bundle proto to a DbNamedQuery. */ (e);
-        }));
-    }
-    saveNamedQuery(e, t) {
-        return __PRIVATE_namedQueriesStore(e).put(function __PRIVATE_toDbNamedQuery(e) {
-            return {
-                name: e.name,
-                readTime: __PRIVATE_toDbTimestamp(__PRIVATE_fromVersion(e.readTime)),
-                bundledQuery: e.bundledQuery
-            };
-        }(t));
-    }
-}
-
-/**
- * Helper to get a typed SimpleDbStore for the bundles object store.
- */ function __PRIVATE_bundlesStore(e) {
-    return __PRIVATE_getStore(e, me);
-}
-
-/**
- * Helper to get a typed SimpleDbStore for the namedQueries object store.
- */ function __PRIVATE_namedQueriesStore(e) {
-    return __PRIVATE_getStore(e, ge);
-}
-
-/**
- * @license
- * Copyright 2022 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-/**
- * Implementation of DocumentOverlayCache using IndexedDb.
- */ class __PRIVATE_IndexedDbDocumentOverlayCache {
-    /**
-     * @param serializer - The document serializer.
-     * @param userId - The userId for which we are accessing overlays.
-     */
-    constructor(e, t) {
-        this.serializer = e, this.userId = t;
-    }
-    static jr(e, t) {
-        const n = t.uid || "";
-        return new __PRIVATE_IndexedDbDocumentOverlayCache(e, n);
-    }
-    getOverlay(e, t) {
-        return __PRIVATE_documentOverlayStore(e).get(__PRIVATE_toDbDocumentOverlayKey(this.userId, t)).next((e => e ? __PRIVATE_fromDbDocumentOverlay(this.serializer, e) : null));
-    }
-    getOverlays(e, t) {
-        const n = __PRIVATE_newOverlayMap();
-        return PersistencePromise.forEach(t, (t => this.getOverlay(e, t).next((e => {
-            null !== e && n.set(t, e);
-        })))).next((() => n));
-    }
-    getAllOverlays(e, t) {
-        const n = __PRIVATE_newOverlayMap();
-        // TODO(pipeline): should we create an index for this? But how often people really expect
-        // querying entire database to be fast?
-                return __PRIVATE_documentOverlayStore(e).ee(((e, r) => {
-            const i = __PRIVATE_fromDbDocumentOverlay(this.serializer, r);
-            i.largestBatchId > t && n.set(i.getKey(), i);
-        })).next((() => n));
-    }
-    saveOverlays(e, t, n) {
-        const r = [];
-        return n.forEach(((n, i) => {
-            const s = new Overlay(t, i);
-            r.push(this.Hr(e, s));
-        })), PersistencePromise.waitFor(r);
-    }
-    removeOverlaysForBatchId(e, t, n) {
-        const r = new Set;
-        // Get the set of unique collection paths.
-                t.forEach((e => r.add(__PRIVATE_encodeResourcePath(e.getCollectionPath()))));
-        const i = [];
-        return r.forEach((t => {
-            const r = IDBKeyRange.bound([ this.userId, t, n ], [ this.userId, t, n + 1 ], 
-            /*lowerOpen=*/ false, 
-            /*upperOpen=*/ true);
-            i.push(__PRIVATE_documentOverlayStore(e).Z(ke, r));
-        })), PersistencePromise.waitFor(i);
-    }
-    getOverlaysForCollection(e, t, n) {
-        const r = __PRIVATE_newOverlayMap(), i = __PRIVATE_encodeResourcePath(t), s = IDBKeyRange.bound([ this.userId, i, n ], [ this.userId, i, Number.POSITIVE_INFINITY ], 
-        /*lowerOpen=*/ true);
-        return __PRIVATE_documentOverlayStore(e).H(ke, s).next((e => {
-            for (const t of e) {
-                const e = __PRIVATE_fromDbDocumentOverlay(this.serializer, t);
-                r.set(e.getKey(), e);
-            }
-            return r;
-        }));
-    }
-    getOverlaysForCollectionGroup(e, t, n, r) {
-        const i = __PRIVATE_newOverlayMap();
-        let s;
-        // We want batch IDs larger than `sinceBatchId`, and so the lower bound
-        // is not inclusive.
-                const _ = IDBKeyRange.bound([ this.userId, t, n ], [ this.userId, t, Number.POSITIVE_INFINITY ], 
-        /*lowerOpen=*/ true);
-        return __PRIVATE_documentOverlayStore(e).ee({
-            index: $e,
-            range: _
-        }, ((e, t, n) => {
-            // We do not want to return partial batch overlays, even if the size
-            // of the result set exceeds the given `count` argument. Therefore, we
-            // continue to aggregate results even after the result size exceeds
-            // `count` if there are more overlays from the `currentBatchId`.
-            const _ = __PRIVATE_fromDbDocumentOverlay(this.serializer, t);
-            i.size() < r || _.largestBatchId === s ? (i.set(_.getKey(), _), s = _.largestBatchId) : n.done();
-        })).next((() => i));
-    }
-    Hr(e, t) {
-        return __PRIVATE_documentOverlayStore(e).put(function __PRIVATE_toDbDocumentOverlay(e, t, n) {
-            const [r, i, s] = __PRIVATE_toDbDocumentOverlayKey(t, n.mutation.key);
-            return {
-                userId: t,
-                collectionPath: i,
-                documentId: s,
-                collectionGroup: n.mutation.key.getCollectionGroup(),
-                largestBatchId: n.largestBatchId,
-                overlayMutation: toMutation(e.zr, n.mutation)
-            };
-        }(this.serializer, this.userId, t));
-    }
-}
-
-/**
- * Helper to get a typed SimpleDbStore for the document overlay object store.
- */ function __PRIVATE_documentOverlayStore(e) {
-    return __PRIVATE_getStore(e, Be);
-}
-
-/**
- * @license
- * Copyright 2024 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */ class __PRIVATE_IndexedDbGlobalsCache {
-    Jr(e) {
-        return __PRIVATE_getStore(e, We);
-    }
-    getSessionToken(e) {
-        return this.Jr(e).get("sessionToken").next((e => {
-            const t = e?.value;
-            return t ? ByteString.fromUint8Array(t) : ByteString.EMPTY_BYTE_STRING;
-        }));
-    }
-    setSessionToken(e, t) {
-        return this.Jr(e).put({
-            name: "sessionToken",
-            value: t.toUint8Array()
-        });
-    }
-}
-
-/**
- * @license
- * Copyright 2021 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-// Note: This code is copied from the backend. Code that is not used by
-// Firestore was removed.
-/** Firestore index value writer.  */
-class __PRIVATE_FirestoreIndexValueWriter {
-    constructor() {}
-    // The write methods below short-circuit writing terminators for values
-    // containing a (terminating) truncated value.
-    // As an example, consider the resulting encoding for:
-    // ["bar", [2, "foo"]] -> (STRING, "bar", TERM, ARRAY, NUMBER, 2, STRING, "foo", TERM, TERM, TERM)
-    // ["bar", [2, truncated("foo")]] -> (STRING, "bar", TERM, ARRAY, NUMBER, 2, STRING, "foo", TRUNC)
-    // ["bar", truncated(["foo"])] -> (STRING, "bar", TERM, ARRAY. STRING, "foo", TERM, TRUNC)
-    /** Writes an index value.  */
-    Yr(e, t) {
-        this.Zr(e, t), 
-        // Write separator to split index values
-        // (see go/firestore-storage-format#encodings).
-        t.Xr();
-    }
-    Zr(e, t) {
-        if ("nullValue" in e) this.ei(t, 5); else if ("booleanValue" in e) this.ei(t, 10), 
-        t.ti(e.booleanValue ? 1 : 0); else if ("integerValue" in e) this.ei(t, 15), t.ti(__PRIVATE_normalizeNumber(e.integerValue)); else if ("doubleValue" in e) {
-            const n = __PRIVATE_normalizeNumber(e.doubleValue);
-            isNaN(n) ? this.ei(t, 13) : (this.ei(t, 15), __PRIVATE_isNegativeZero(n) ? 
-            // -0.0, 0 and 0.0 are all considered the same
-            t.ti(0) : t.ti(n));
-        } else if ("timestampValue" in e) {
-            let n = e.timestampValue;
-            this.ei(t, 20), "string" == typeof n && (n = __PRIVATE_normalizeTimestamp(n)), t.ni(`${n.seconds || ""}`), 
-            t.ti(n.nanos || 0);
-        } else if ("stringValue" in e) this.ri(e.stringValue, t), this.ii(t); else if ("bytesValue" in e) this.ei(t, 30), 
-        t.si(__PRIVATE_normalizeByteString(e.bytesValue)), this.ii(t); else if ("referenceValue" in e) this._i(e.referenceValue, t); else if ("geoPointValue" in e) {
-            const n = e.geoPointValue;
-            this.ei(t, 45), t.ti(n.latitude || 0), t.ti(n.longitude || 0);
-        } else "mapValue" in e ? __PRIVATE_isMaxValue(e) ? this.ei(t, Number.MAX_SAFE_INTEGER) : __PRIVATE_isVectorValue(e) ? this.oi(e.mapValue, t) : (this.ai(e.mapValue, t), 
-        this.ii(t)) : "arrayValue" in e ? (this.ui(e.arrayValue, t), this.ii(t)) : fail(19022, {
-            ci: e
-        });
-    }
-    ri(e, t) {
-        this.ei(t, 25), this.li(e, t);
-    }
-    li(e, t) {
-        t.ni(e);
-    }
-    ai(e, t) {
-        const n = e.fields || {};
-        this.ei(t, 55);
-        for (const e of Object.keys(n)) this.ri(e, t), this.Zr(n[e], t);
-    }
-    oi(e, t) {
-        const n = e.fields || {};
-        this.ei(t, 53);
-        // Vectors sort first by length
-        const r = ct, i = n[r].arrayValue?.values?.length || 0;
-        this.ei(t, 15), t.ti(__PRIVATE_normalizeNumber(i)), 
-        // Vectors then sort by position value
-        this.ri(r, t), this.Zr(n[r], t);
-    }
-    ui(e, t) {
-        const n = e.values || [];
-        this.ei(t, 50);
-        for (const e of n) this.Zr(e, t);
-    }
-    _i(e, t) {
-        this.ei(t, 37);
-        DocumentKey.fromName(e).path.forEach((e => {
-            this.ei(t, 60), this.li(e, t);
-        }));
-    }
-    ei(e, t) {
-        e.ti(t);
-    }
-    ii(e) {
-        // While the SDK does not implement truncation, the truncation marker is
-        // used to terminate all variable length values (which are strings, bytes,
-        // references, arrays and maps).
-        e.ti(2);
-    }
-}
-
-__PRIVATE_FirestoreIndexValueWriter.Ei = new __PRIVATE_FirestoreIndexValueWriter;
-
-/**
- * @license
- * Copyright 2021 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law | agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES | CONDITIONS OF ANY KIND, either express | implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-/** These constants are taken from the backend. */
-const en = 255;
-
-/**
- * Counts the number of zeros in a byte.
- *
- * Visible for testing.
- */
-function __PRIVATE_numberOfLeadingZerosInByte(e) {
-    if (0 === e) return 8;
-    let t = 0;
-    return e >> 4 || (
-    // Test if the first four bits are zero.
-    t += 4, e <<= 4), e >> 6 || (
-    // Test if the first two (or next two) bits are zero.
-    t += 2, e <<= 2), e >> 7 || (
-    // Test if the remaining bit is zero.
-    t += 1), t;
-}
-
-/** Counts the number of leading zeros in the given byte array. */
-/**
- * Returns the number of bytes required to store "value". Leading zero bytes
- * are skipped.
- */
-function __PRIVATE_unsignedNumLength(e) {
-    // This is just the number of bytes for the unsigned representation of the number.
-    const t = 64 - function __PRIVATE_numberOfLeadingZeros(e) {
-        let t = 0;
-        for (let n = 0; n < 8; ++n) {
-            const r = __PRIVATE_numberOfLeadingZerosInByte(255 & e[n]);
-            if (t += r, 8 !== r) break;
-        }
-        return t;
-    }(e);
-    return Math.ceil(t / 8);
-}
-
-/**
- * OrderedCodeWriter is a minimal-allocation implementation of the writing
- * behavior defined by the backend.
- *
- * The code is ported from its Java counterpart.
- */ class __PRIVATE_OrderedCodeWriter {
-    constructor() {
-        this.buffer = new Uint8Array(1024), this.position = 0;
-    }
-    hi(e) {
-        const t = e[Symbol.iterator]();
-        let n = t.next();
-        for (;!n.done; ) this.Ti(n.value), n = t.next();
-        this.Pi();
-    }
-    Ri(e) {
-        const t = e[Symbol.iterator]();
-        let n = t.next();
-        for (;!n.done; ) this.Ii(n.value), n = t.next();
-        this.Ai();
-    }
-    /** Writes utf8 bytes into this byte sequence, ascending. */    Vi(e) {
-        for (const t of e) {
-            const e = t.charCodeAt(0);
-            if (e < 128) this.Ti(e); else if (e < 2048) this.Ti(960 | e >>> 6), this.Ti(128 | 63 & e); else if (t < "\ud800" || "\udbff" < t) this.Ti(480 | e >>> 12), 
-            this.Ti(128 | 63 & e >>> 6), this.Ti(128 | 63 & e); else {
-                const e = t.codePointAt(0);
-                this.Ti(240 | e >>> 18), this.Ti(128 | 63 & e >>> 12), this.Ti(128 | 63 & e >>> 6), 
-                this.Ti(128 | 63 & e);
-            }
-        }
-        this.Pi();
-    }
-    /** Writes utf8 bytes into this byte sequence, descending */    di(e) {
-        for (const t of e) {
-            const e = t.charCodeAt(0);
-            if (e < 128) this.Ii(e); else if (e < 2048) this.Ii(960 | e >>> 6), this.Ii(128 | 63 & e); else if (t < "\ud800" || "\udbff" < t) this.Ii(480 | e >>> 12), 
-            this.Ii(128 | 63 & e >>> 6), this.Ii(128 | 63 & e); else {
-                const e = t.codePointAt(0);
-                this.Ii(240 | e >>> 18), this.Ii(128 | 63 & e >>> 12), this.Ii(128 | 63 & e >>> 6), 
-                this.Ii(128 | 63 & e);
-            }
-        }
-        this.Ai();
-    }
-    fi(e) {
-        // Values are encoded with a single byte length prefix, followed by the
-        // actual value in big-endian format with leading 0 bytes dropped.
-        const t = this.mi(e), n = __PRIVATE_unsignedNumLength(t);
-        this.pi(1 + n), this.buffer[this.position++] = 255 & n;
-        // Write the length
-        for (let e = t.length - n; e < t.length; ++e) this.buffer[this.position++] = 255 & t[e];
-    }
-    gi(e) {
-        // Values are encoded with a single byte length prefix, followed by the
-        // inverted value in big-endian format with leading 0 bytes dropped.
-        const t = this.mi(e), n = __PRIVATE_unsignedNumLength(t);
-        this.pi(1 + n), this.buffer[this.position++] = ~(255 & n);
-        // Write the length
-        for (let e = t.length - n; e < t.length; ++e) this.buffer[this.position++] = ~(255 & t[e]);
-    }
-    /**
-     * Writes the "infinity" byte sequence that sorts after all other byte
-     * sequences written in ascending order.
-     */    yi() {
-        this.wi(en), this.wi(255);
-    }
-    /**
-     * Writes the "infinity" byte sequence that sorts before all other byte
-     * sequences written in descending order.
-     */    bi() {
-        this.Si(en), this.Si(255);
-    }
-    /**
-     * Resets the buffer such that it is the same as when it was newly
-     * constructed.
-     */    reset() {
-        this.position = 0;
-    }
-    seed(e) {
-        this.pi(e.length), this.buffer.set(e, this.position), this.position += e.length;
-    }
-    /** Makes a copy of the encoded bytes in this buffer.  */    Di() {
-        return this.buffer.slice(0, this.position);
-    }
-    /**
-     * Encodes `val` into an encoding so that the order matches the IEEE 754
-     * floating-point comparison results with the following exceptions:
-     *   -0.0 < 0.0
-     *   all non-NaN < NaN
-     *   NaN = NaN
-     */    mi(e) {
-        const t = 
-        /** Converts a JavaScript number to a byte array (using big endian encoding). */
-        function __PRIVATE_doubleToLongBits(e) {
-            const t = new DataView(new ArrayBuffer(8));
-            return t.setFloat64(0, e, /* littleEndian= */ false), new Uint8Array(t.buffer);
-        }(e), n = !!(128 & t[0]);
-        // Check if the first bit is set. We use a bit mask since value[0] is
-        // encoded as a number from 0 to 255.
-                // Revert the two complement to get natural ordering
-        t[0] ^= n ? 255 : 128;
-        for (let e = 1; e < t.length; ++e) t[e] ^= n ? 255 : 0;
-        return t;
-    }
-    /** Writes a single byte ascending to the buffer. */    Ti(e) {
-        const t = 255 & e;
-        0 === t ? (this.wi(0), this.wi(255)) : t === en ? (this.wi(en), this.wi(0)) : this.wi(t);
-    }
-    /** Writes a single byte descending to the buffer.  */    Ii(e) {
-        const t = 255 & e;
-        0 === t ? (this.Si(0), this.Si(255)) : t === en ? (this.Si(en), this.Si(0)) : this.Si(e);
-    }
-    Pi() {
-        this.wi(0), this.wi(1);
-    }
-    Ai() {
-        this.Si(0), this.Si(1);
-    }
-    wi(e) {
-        this.pi(1), this.buffer[this.position++] = e;
-    }
-    Si(e) {
-        this.pi(1), this.buffer[this.position++] = ~e;
-    }
-    pi(e) {
-        const t = e + this.position;
-        if (t <= this.buffer.length) return;
-        // Try doubling.
-                let n = 2 * this.buffer.length;
-        // Still not big enough? Just allocate the right size.
-                n < t && (n = t);
-        // Create the new buffer.
-                const r = new Uint8Array(n);
-        r.set(this.buffer), // copy old data
-        this.buffer = r;
-    }
-}
-
-class __PRIVATE_AscendingIndexByteEncoder {
-    constructor(e) {
-        this.xi = e;
-    }
-    si(e) {
-        this.xi.hi(e);
-    }
-    ni(e) {
-        this.xi.Vi(e);
-    }
-    ti(e) {
-        this.xi.fi(e);
-    }
-    Xr() {
-        this.xi.yi();
-    }
-}
-
-class __PRIVATE_DescendingIndexByteEncoder {
-    constructor(e) {
-        this.xi = e;
-    }
-    si(e) {
-        this.xi.Ri(e);
-    }
-    ni(e) {
-        this.xi.di(e);
-    }
-    ti(e) {
-        this.xi.gi(e);
-    }
-    Xr() {
-        this.xi.bi();
-    }
-}
-
-/**
- * Implements `DirectionalIndexByteEncoder` using `OrderedCodeWriter` for the
- * actual encoding.
- */ class __PRIVATE_IndexByteEncoder {
-    constructor() {
-        this.xi = new __PRIVATE_OrderedCodeWriter, this.ascending = new __PRIVATE_AscendingIndexByteEncoder(this.xi), 
-        this.descending = new __PRIVATE_DescendingIndexByteEncoder(this.xi);
-    }
-    seed(e) {
-        this.xi.seed(e);
-    }
-    Ci(e) {
-        return 0 /* IndexKind.ASCENDING */ === e ? this.ascending : this.descending;
-    }
-    Di() {
-        return this.xi.Di();
-    }
-    reset() {
-        this.xi.reset();
-    }
-}
-
-/**
- * @license
- * Copyright 2022 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-/** Represents an index entry saved by the SDK in persisted storage. */ class __PRIVATE_IndexEntry {
-    constructor(e, t, n, r) {
-        this.Fi = e, this.Oi = t, this.Mi = n, this.Ni = r;
-    }
-    /**
-     * Returns an IndexEntry entry that sorts immediately after the current
-     * directional value.
-     */    Li() {
-        const e = this.Ni.length, t = 0 === e || 255 === this.Ni[e - 1] ? e + 1 : e, n = new Uint8Array(t);
-        return n.set(this.Ni, 0), t !== e ? n.set([ 0 ], this.Ni.length) : ++n[n.length - 1], 
-        new __PRIVATE_IndexEntry(this.Fi, this.Oi, this.Mi, n);
-    }
-    // Create a representation of the Index Entry as a DbIndexEntry
-    Bi(e, t, n) {
-        return {
-            indexId: this.Fi,
-            uid: e,
-            arrayValue: __PRIVATE_encodeKeySafeBytes(this.Mi),
-            directionalValue: __PRIVATE_encodeKeySafeBytes(this.Ni),
-            orderedDocumentKey: __PRIVATE_encodeKeySafeBytes(t),
-            documentKey: n.path.toArray()
-        };
-    }
-    // Create a representation of the Index Entry as a DbIndexEntryKey
-    Ui(e, t, n) {
-        const r = this.Bi(e, t, n);
-        return [ r.indexId, r.uid, r.arrayValue, r.directionalValue, r.orderedDocumentKey, r.documentKey ];
-    }
-}
-
-function __PRIVATE_indexEntryComparator(e, t) {
-    let n = e.Fi - t.Fi;
-    return 0 !== n ? n : (n = __PRIVATE_compareByteArrays(e.Mi, t.Mi), 0 !== n ? n : (n = __PRIVATE_compareByteArrays(e.Ni, t.Ni), 
-    0 !== n ? n : DocumentKey.comparator(e.Oi, t.Oi)));
-}
-
-function __PRIVATE_compareByteArrays(e, t) {
-    for (let n = 0; n < e.length && n < t.length; ++n) {
-        const r = e[n] - t[n];
-        if (0 !== r) return r;
-    }
-    return e.length - t.length;
-}
-
-/**
- * Workaround for WebKit bug: https://bugs.webkit.org/show_bug.cgi?id=292721
- * Create a key safe representation of Uint8Array values.
- * If the browser is detected as Safari or WebKit, then
- * the input array will be converted to "sortable byte string".
- * Otherwise, the input array will be returned in its original type.
- */ function __PRIVATE_encodeKeySafeBytes(e) {
-    return isSafariOrWebkit() ? 
-    /**
- * Encodes a Uint8Array into a "sortable byte string".
- * A "sortable byte string" sorts in the same order as the Uint8Array.
- * This works because JS string comparison sorts strings based on code points.
- */
-    function __PRIVATE_encodeUint8ArrayToSortableString(e) {
-        let t = "";
-        for (let n = 0; n < e.length; n++) t += String.fromCharCode(e[n]);
-        return t;
-    }
-    /**
- * Decodes a "sortable byte string" back into a Uint8Array.
- * A "sortable byte string" is assumed to be created where each character's
- * Unicode code point directly corresponds to a single byte value (0-255).
- */ (e) : e;
-}
-
-/**
- * Reverts the key safe representation of Uint8Array (created by
- * encodeKeySafeBytes) to a normal Uint8Array.
- */ function __PRIVATE_decodeKeySafeBytes(e) {
-    return "string" != typeof e ? e : function __PRIVATE_decodeSortableStringToUint8Array(e) {
-        const t = new Uint8Array(e.length);
-        for (let n = 0; n < e.length; n++) t[n] = e.charCodeAt(n);
-        return t;
-    }
-    /**
- * @license
- * Copyright 2022 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-    /**
- * A light query planner for Firestore.
- *
- * This class matches a `FieldIndex` against a Firestore Query `Target`. It
- * determines whether a given index can be used to serve the specified target.
- *
- * The following table showcases some possible index configurations:
- *
- * Query                                               | Index
- * -----------------------------------------------------------------------------
- * where('a', '==', 'a').where('b', '==', 'b')         | a ASC, b DESC
- * where('a', '==', 'a').where('b', '==', 'b')         | a ASC
- * where('a', '==', 'a').where('b', '==', 'b')         | b DESC
- * where('a', '>=', 'a').orderBy('a')                  | a ASC
- * where('a', '>=', 'a').orderBy('a', 'desc')          | a DESC
- * where('a', '>=', 'a').orderBy('a').orderBy('b')     | a ASC, b ASC
- * where('a', '>=', 'a').orderBy('a').orderBy('b')     | a ASC
- * where('a', 'array-contains', 'a').orderBy('b')      | a CONTAINS, b ASCENDING
- * where('a', 'array-contains', 'a').orderBy('b')      | a CONTAINS
- */ (e);
-}
-
-class __PRIVATE_TargetIndexMatcher {
-    constructor(e) {
-        // The inequality filters of the target (if it exists).
-        // Note: The sort on FieldFilters is not required. Using SortedSet here just to utilize the custom
-        // comparator.
-        this.ki = new SortedSet(((e, t) => FieldPath$1.comparator(e.field, t.field))), this.collectionId = null != e.collectionGroup ? e.collectionGroup : e.path.lastSegment(), 
-        this.qi = e.orderBy, this.$i = [];
-        for (const t of e.filters) {
-            const e = t;
-            e.isInequality() ? this.ki = this.ki.add(e) : this.$i.push(e);
-        }
-    }
-    get Ki() {
-        return this.ki.size > 1;
-    }
-    /**
-     * Returns whether the index can be used to serve the TargetIndexMatcher's
-     * target.
-     *
-     * An index is considered capable of serving the target when:
-     * - The target uses all index segments for its filters and orderBy clauses.
-     *   The target can have additional filter and orderBy clauses, but not
-     *   fewer.
-     * - If an ArrayContains/ArrayContainsAnyfilter is used, the index must also
-     *   have a corresponding `CONTAINS` segment.
-     * - All directional index segments can be mapped to the target as a series of
-     *   equality filters, a single inequality filter and a series of orderBy
-     *   clauses.
-     * - The segments that represent the equality filters may appear out of order.
-     * - The optional segment for the inequality filter must appear after all
-     *   equality segments.
-     * - The segments that represent that orderBy clause of the target must appear
-     *   in order after all equality and inequality segments. Single orderBy
-     *   clauses cannot be skipped, but a continuous orderBy suffix may be
-     *   omitted.
-     */    Wi(e) {
-        if (__PRIVATE_hardAssert(e.collectionGroup === this.collectionId, 49279), this.Ki) 
-        // Only single inequality is supported for now.
-        // TODO(Add support for multiple inequality query): b/298441043
-        return false;
-        // If there is an array element, find a matching filter.
-                const t = __PRIVATE_fieldIndexGetArraySegment(e);
-        if (void 0 !== t && !this.Qi(t)) return false;
-        const n = __PRIVATE_fieldIndexGetDirectionalSegments(e);
-        let r = new Set, i = 0, s = 0;
-        // Process all equalities first. Equalities can appear out of order.
-        for (;i < n.length && this.Qi(n[i]); ++i) r = r.add(n[i].fieldPath.canonicalString());
-        // If we already have processed all segments, all segments are used to serve
-        // the equality filters and we do not need to map any segments to the
-        // target's inequality and orderBy clauses.
-                if (i === n.length) return true;
-        if (this.ki.size > 0) {
-            // Only a single inequality is currently supported. Get the only entry in the set.
-            const e = this.ki.getIterator().getNext();
-            // If there is an inequality filter and the field was not in one of the
-            // equality filters above, the next segment must match both the filter
-            // and the first orderBy clause.
-                        if (!r.has(e.field.canonicalString())) {
-                const t = n[i];
-                if (!this.Gi(e, t) || !this.zi(this.qi[s++], t)) return false;
-            }
-            ++i;
-        }
-        // All remaining segments need to represent the prefix of the target's
-        // orderBy.
-                for (;i < n.length; ++i) {
-            const e = n[i];
-            if (s >= this.qi.length || !this.zi(this.qi[s++], e)) return false;
-        }
-        return true;
-    }
-    /**
-     * Returns a full matched field index for this target. Currently multiple
-     * inequality query is not supported so function returns null.
-     */    ji() {
-        if (this.Ki) return null;
-        // We want to make sure only one segment created for one field. For example,
-        // in case like a == 3 and a > 2, Index {a ASCENDING} will only be created
-        // once.
-                let e = new SortedSet(FieldPath$1.comparator);
-        const t = [];
-        for (const n of this.$i) {
-            if (n.field.isKeyField()) continue;
-            if ("array-contains" /* Operator.ARRAY_CONTAINS */ === n.op || "array-contains-any" /* Operator.ARRAY_CONTAINS_ANY */ === n.op) t.push(new IndexSegment(n.field, 2 /* IndexKind.CONTAINS */)); else {
-                if (e.has(n.field)) continue;
-                e = e.add(n.field), t.push(new IndexSegment(n.field, 0 /* IndexKind.ASCENDING */));
-            }
-        }
-        // Note: We do not explicitly check `this.inequalityFilter` but rather rely
-        // on the target defining an appropriate "order by" to ensure that the
-        // required index segment is added. The query engine would reject a query
-        // with an inequality filter that lacks the required order-by clause.
-                for (const n of this.qi) 
-        // Stop adding more segments if we see a order-by on key. Typically this
-        // is the default implicit order-by which is covered in the index_entry
-        // table as a separate column. If it is not the default order-by, the
-        // generated index will be missing some segments optimized for order-bys,
-        // which is probably fine.
-        n.field.isKeyField() || e.has(n.field) || (e = e.add(n.field), t.push(new IndexSegment(n.field, "asc" /* Direction.ASCENDING */ === n.dir ? 0 /* IndexKind.ASCENDING */ : 1 /* IndexKind.DESCENDING */)));
-        return new FieldIndex(FieldIndex.UNKNOWN_ID, this.collectionId, t, IndexState.empty());
-    }
-    Qi(e) {
-        for (const t of this.$i) if (this.Gi(t, e)) return true;
-        return false;
-    }
-    Gi(e, t) {
-        if (void 0 === e || !e.field.isEqual(t.fieldPath)) return false;
-        const n = "array-contains" /* Operator.ARRAY_CONTAINS */ === e.op || "array-contains-any" /* Operator.ARRAY_CONTAINS_ANY */ === e.op;
-        return 2 /* IndexKind.CONTAINS */ === t.kind === n;
-    }
-    zi(e, t) {
-        return !!e.field.isEqual(t.fieldPath) && (0 /* IndexKind.ASCENDING */ === t.kind && "asc" /* Direction.ASCENDING */ === e.dir || 1 /* IndexKind.DESCENDING */ === t.kind && "desc" /* Direction.DESCENDING */ === e.dir);
-    }
-}
-
-/**
- * @license
- * Copyright 2022 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-/**
- * Provides utility functions that help with boolean logic transformations needed for handling
- * complex filters used in queries.
- */
-/**
- * The `in` filter is only a syntactic sugar over a disjunction of equalities. For instance: `a in
- * [1,2,3]` is in fact `a==1 || a==2 || a==3`. This method expands any `in` filter in the given
- * input into a disjunction of equality filters and returns the expanded filter.
- */ function __PRIVATE_computeInExpansion(e) {
-    if (__PRIVATE_hardAssert(e instanceof FieldFilter || e instanceof CompositeFilter, 20012), 
-    e instanceof FieldFilter) {
-        if (e instanceof __PRIVATE_InFilter) {
-            const t = e.value.arrayValue?.values?.map((t => FieldFilter.create(e.field, "==" /* Operator.EQUAL */ , t))) || [];
-            return CompositeFilter.create(t, "or" /* CompositeOperator.OR */);
-        }
-        // We have reached other kinds of field filters.
-        return e;
-    }
-    // We have a composite filter.
-        const t = e.filters.map((e => __PRIVATE_computeInExpansion(e)));
-    return CompositeFilter.create(t, e.op);
-}
-
-/**
- * Given a composite filter, returns the list of terms in its disjunctive normal form.
- *
- * <p>Each element in the return value is one term of the resulting DNF. For instance: For the
- * input: (A || B) && C, the DNF form is: (A && C) || (B && C), and the return value is a list
- * with two elements: a composite filter that performs (A && C), and a composite filter that
- * performs (B && C).
- *
- * @param filter - the composite filter to calculate DNF transform for.
- * @returns the terms in the DNF transform.
- */ function __PRIVATE_getDnfTerms(e) {
-    if (0 === e.getFilters().length) return [];
-    const t = __PRIVATE_computeDistributedNormalForm(__PRIVATE_computeInExpansion(e));
-    return __PRIVATE_hardAssert(__PRIVATE_isDisjunctiveNormalForm(t), 7391), __PRIVATE_isSingleFieldFilter(t) || __PRIVATE_isFlatConjunction(t) ? [ t ] : t.getFilters();
-}
-
-/** Returns true if the given filter is a single field filter. e.g. (a == 10). */ function __PRIVATE_isSingleFieldFilter(e) {
-    return e instanceof FieldFilter;
-}
-
-/**
- * Returns true if the given filter is the conjunction of one or more field filters. e.g. (a == 10
- * && b == 20)
- */ function __PRIVATE_isFlatConjunction(e) {
-    return e instanceof CompositeFilter && __PRIVATE_compositeFilterIsFlatConjunction(e);
-}
-
-/**
- * Returns whether or not the given filter is in disjunctive normal form (DNF).
- *
- * <p>In boolean logic, a disjunctive normal form (DNF) is a canonical normal form of a logical
- * formula consisting of a disjunction of conjunctions; it can also be described as an OR of ANDs.
- *
- * <p>For more info, visit: https://en.wikipedia.org/wiki/Disjunctive_normal_form
- */ function __PRIVATE_isDisjunctiveNormalForm(e) {
-    return __PRIVATE_isSingleFieldFilter(e) || __PRIVATE_isFlatConjunction(e) || 
-    /**
- * Returns true if the given filter is the disjunction of one or more "flat conjunctions" and
- * field filters. e.g. (a == 10) || (b==20 && c==30)
- */
-    function __PRIVATE_isDisjunctionOfFieldFiltersAndFlatConjunctions(e) {
-        if (e instanceof CompositeFilter && __PRIVATE_compositeFilterIsDisjunction(e)) {
-            for (const t of e.getFilters()) if (!__PRIVATE_isSingleFieldFilter(t) && !__PRIVATE_isFlatConjunction(t)) return false;
-            return true;
-        }
-        return false;
-    }(e);
-}
-
-function __PRIVATE_computeDistributedNormalForm(e) {
-    if (__PRIVATE_hardAssert(e instanceof FieldFilter || e instanceof CompositeFilter, 34018), 
-    e instanceof FieldFilter) return e;
-    if (1 === e.filters.length) return __PRIVATE_computeDistributedNormalForm(e.filters[0]);
-    // Compute DNF for each of the subfilters first
-        const t = e.filters.map((e => __PRIVATE_computeDistributedNormalForm(e)));
-    let n = CompositeFilter.create(t, e.op);
-    return n = __PRIVATE_applyAssociation(n), __PRIVATE_isDisjunctiveNormalForm(n) ? n : (__PRIVATE_hardAssert(n instanceof CompositeFilter, 64498), 
-    __PRIVATE_hardAssert(__PRIVATE_compositeFilterIsConjunction(n), 40251), __PRIVATE_hardAssert(n.filters.length > 1, 57927), 
-    n.filters.reduce(((e, t) => __PRIVATE_applyDistribution(e, t))));
-}
-
-function __PRIVATE_applyDistribution(e, t) {
-    let n;
-    return __PRIVATE_hardAssert(e instanceof FieldFilter || e instanceof CompositeFilter, 38388), 
-    __PRIVATE_hardAssert(t instanceof FieldFilter || t instanceof CompositeFilter, 25473), 
-    // FieldFilter FieldFilter
-    n = e instanceof FieldFilter ? t instanceof FieldFilter ? function __PRIVATE_applyDistributionFieldFilters(e, t) {
-        // Conjunction distribution for two field filters is the conjunction of them.
-        return CompositeFilter.create([ e, t ], "and" /* CompositeOperator.AND */);
-    }(e, t) : __PRIVATE_applyDistributionFieldAndCompositeFilters(e, t) : t instanceof FieldFilter ? __PRIVATE_applyDistributionFieldAndCompositeFilters(t, e) : function __PRIVATE_applyDistributionCompositeFilters(e, t) {
-        // There are four cases:
-        // (A & B) & (C & D) --> (A & B & C & D)
-        // (A & B) & (C | D) --> (A & B & C) | (A & B & D)
-        // (A | B) & (C & D) --> (C & D & A) | (C & D & B)
-        // (A | B) & (C | D) --> (A & C) | (A & D) | (B & C) | (B & D)
-        // Case 1 is a merge.
-        if (__PRIVATE_hardAssert(e.filters.length > 0 && t.filters.length > 0, 48005), __PRIVATE_compositeFilterIsConjunction(e) && __PRIVATE_compositeFilterIsConjunction(t)) return __PRIVATE_compositeFilterWithAddedFilters(e, t.getFilters());
-        // Case 2,3,4 all have at least one side (lhs or rhs) that is a disjunction. In all three cases
-        // we should take each element of the disjunction and distribute it over the other side, and
-        // return the disjunction of the distribution results.
-                const n = __PRIVATE_compositeFilterIsDisjunction(e) ? e : t, r = __PRIVATE_compositeFilterIsDisjunction(e) ? t : e, i = n.filters.map((e => __PRIVATE_applyDistribution(e, r)));
-        return CompositeFilter.create(i, "or" /* CompositeOperator.OR */);
-    }(e, t), __PRIVATE_applyAssociation(n);
-}
-
-function __PRIVATE_applyDistributionFieldAndCompositeFilters(e, t) {
-    // There are two cases:
-    // A & (B & C) --> (A & B & C)
-    // A & (B | C) --> (A & B) | (A & C)
-    if (__PRIVATE_compositeFilterIsConjunction(t)) 
-    // Case 1
-    return __PRIVATE_compositeFilterWithAddedFilters(t, e.getFilters());
-    {
-        // Case 2
-        const n = t.filters.map((t => __PRIVATE_applyDistribution(e, t)));
-        return CompositeFilter.create(n, "or" /* CompositeOperator.OR */);
-    }
-}
-
-/**
- * Applies the associativity property to the given filter and returns the resulting filter.
- *
- * <ul>
- *   <li>A | (B | C) == (A | B) | C == (A | B | C)
- *   <li>A & (B & C) == (A & B) & C == (A & B & C)
- * </ul>
- *
- * <p>For more info, visit: https://en.wikipedia.org/wiki/Associative_property#Propositional_logic
- */ function __PRIVATE_applyAssociation(e) {
-    if (__PRIVATE_hardAssert(e instanceof FieldFilter || e instanceof CompositeFilter, 11850), 
-    e instanceof FieldFilter) return e;
-    const t = e.getFilters();
-    // If the composite filter only contains 1 filter, apply associativity to it.
-        if (1 === t.length) return __PRIVATE_applyAssociation(t[0]);
-    // Associativity applied to a flat composite filter results is itself.
-        if (__PRIVATE_compositeFilterIsFlat(e)) return e;
-    // First apply associativity to all subfilters. This will in turn recursively apply
-    // associativity to all nested composite filters and field filters.
-        const n = t.map((e => __PRIVATE_applyAssociation(e))), r = [];
-    // For composite subfilters that perform the same kind of logical operation as `compositeFilter`
-    // take out their filters and add them to `compositeFilter`. For example:
-    // compositeFilter = (A | (B | C | D))
-    // compositeSubfilter = (B | C | D)
-    // Result: (A | B | C | D)
-    // Note that the `compositeSubfilter` has been eliminated, and its filters (B, C, D) have been
-    // added to the top-level "compositeFilter".
-        return n.forEach((t => {
-        t instanceof FieldFilter ? r.push(t) : t instanceof CompositeFilter && (t.op === e.op ? 
-        // compositeFilter: (A | (B | C))
-        // compositeSubfilter: (B | C)
-        // Result: (A | B | C)
-        r.push(...t.filters) : 
-        // compositeFilter: (A | (B & C))
-        // compositeSubfilter: (B & C)
-        // Result: (A | (B & C))
-        r.push(t));
-    })), 1 === r.length ? r[0] : CompositeFilter.create(r, e.op);
 }
 
 /**
@@ -30793,925 +28384,6 @@ function __PRIVATE_applyDistributionFieldAndCompositeFilters(e, t) {
 
 /**
  * @license
- * Copyright 2019 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */ const tn = "IndexedDbIndexManager", nn = new Uint8Array(0);
-
-/**
- * A persisted implementation of IndexManager.
- *
- * PORTING NOTE: Unlike iOS and Android, the Web SDK does not memoize index
- * data as it supports multi-tab access.
- */
-class __PRIVATE_IndexedDbIndexManager {
-    constructor(e, t) {
-        this.databaseId = t, 
-        /**
-         * An in-memory copy of the index entries we've already written since the SDK
-         * launched. Used to avoid re-writing the same entry repeatedly.
-         *
-         * This is *NOT* a complete cache of what's in persistence and so can never be
-         * used to satisfy reads.
-         */
-        this.Ji = new __PRIVATE_MemoryCollectionParentIndex, 
-        /**
-         * Maps from a target to its equivalent list of sub-targets. Each sub-target
-         * contains only one term from the target's disjunctive normal form (DNF).
-         */
-        this.Yi = new ObjectMap((e => __PRIVATE_canonifyTarget(e)), ((e, t) => __PRIVATE_targetEquals(e, t))), 
-        this.uid = e.uid || "";
-    }
-    /**
-     * Adds a new entry to the collection parent index.
-     *
-     * Repeated calls for the same collectionPath should be avoided within a
-     * transaction as IndexedDbIndexManager only caches writes once a transaction
-     * has been committed.
-     */    addToCollectionParentIndex(e, t) {
-        if (!this.Ji.has(t)) {
-            const n = t.lastSegment(), r = t.popLast();
-            e.addOnCommittedListener((() => {
-                // Add the collection to the in memory cache only if the transaction was
-                // successfully committed.
-                this.Ji.add(t);
-            }));
-            const i = {
-                collectionId: n,
-                parent: __PRIVATE_encodeResourcePath(r)
-            };
-            return __PRIVATE_collectionParentsStore(e).put(i);
-        }
-        return PersistencePromise.resolve();
-    }
-    getCollectionParents(e, t) {
-        const n = [], r = IDBKeyRange.bound([ t, "" ], [ __PRIVATE_immediateSuccessor(t), "" ], 
-        /*lowerOpen=*/ false, 
-        /*upperOpen=*/ true);
-        return __PRIVATE_collectionParentsStore(e).H(r).next((e => {
-            for (const r of e) {
-                // This collectionId guard shouldn't be necessary (and isn't as long
-                // as we're running in a real browser), but there's a bug in
-                // indexeddbshim that breaks our range in our tests running in node:
-                // https://github.com/axemclion/IndexedDBShim/issues/334
-                if (r.collectionId !== t) break;
-                n.push(__PRIVATE_decodeResourcePath(r.parent));
-            }
-            return n;
-        }));
-    }
-    addFieldIndex(e, t) {
-        // TODO(indexing): Verify that the auto-incrementing index ID works in
-        // Safari & Firefox.
-        const n = __PRIVATE_indexConfigurationStore(e), r = function __PRIVATE_toDbIndexConfiguration(e) {
-            return {
-                indexId: e.indexId,
-                collectionGroup: e.collectionGroup,
-                fields: e.fields.map((e => [ e.fieldPath.canonicalString(), e.kind ]))
-            };
-        }(t);
-        delete r.indexId;
-        // `indexId` is auto-populated by IndexedDb
-        const i = n.add(r);
-        if (t.indexState) {
-            const n = __PRIVATE_indexStateStore(e);
-            return i.next((e => {
-                n.put(__PRIVATE_toDbIndexState(e, this.uid, t.indexState.sequenceNumber, t.indexState.offset));
-            }));
-        }
-        return i.next();
-    }
-    deleteFieldIndex(e, t) {
-        const n = __PRIVATE_indexConfigurationStore(e), r = __PRIVATE_indexStateStore(e), i = __PRIVATE_indexEntriesStore(e);
-        return n.delete(t.indexId).next((() => r.delete(IDBKeyRange.bound([ t.indexId ], [ t.indexId + 1 ], 
-        /*lowerOpen=*/ false, 
-        /*upperOpen=*/ true)))).next((() => i.delete(IDBKeyRange.bound([ t.indexId ], [ t.indexId + 1 ], 
-        /*lowerOpen=*/ false, 
-        /*upperOpen=*/ true))));
-    }
-    deleteAllFieldIndexes(e) {
-        const t = __PRIVATE_indexConfigurationStore(e), n = __PRIVATE_indexEntriesStore(e), r = __PRIVATE_indexStateStore(e);
-        return t.Z().next((() => n.Z())).next((() => r.Z()));
-    }
-    createTargetIndexes(e, t) {
-        return PersistencePromise.forEach(this.Zi(t), (t => this.getIndexType(e, t).next((n => {
-            if (0 /* IndexType.NONE */ === n || 1 /* IndexType.PARTIAL */ === n) {
-                const n = new __PRIVATE_TargetIndexMatcher(t).ji();
-                if (null != n) return this.addFieldIndex(e, n);
-            }
-        }))));
-    }
-    getDocumentsMatchingTarget(e, t) {
-        const n = __PRIVATE_indexEntriesStore(e);
-        let r = true;
-        const i = new Map;
-        return PersistencePromise.forEach(this.Zi(t), (t => this.Xi(e, t).next((e => {
-            r && (r = !!e), i.set(t, e);
-        })))).next((() => {
-            if (r) {
-                let e = __PRIVATE_documentKeySet();
-                const r = [];
-                return PersistencePromise.forEach(i, ((i, s) => {
-                    __PRIVATE_logDebug(tn, `Using index ${function __PRIVATE_fieldIndexToString(e) {
-                        return `id=${e.indexId}|cg=${e.collectionGroup}|f=${e.fields.map((e => `${e.fieldPath}:${e.kind}`)).join(",")}`;
-                    }(i)} to execute ${__PRIVATE_canonifyTarget(t)}`);
-                    const _ = function __PRIVATE_targetGetArrayValues(e, t) {
-                        const n = __PRIVATE_fieldIndexGetArraySegment(t);
-                        if (void 0 === n) return null;
-                        for (const t of __PRIVATE_targetGetFieldFiltersForPath(e, n.fieldPath)) switch (t.op) {
-                          case "array-contains-any" /* Operator.ARRAY_CONTAINS_ANY */ :
-                            return t.value.arrayValue.values || [];
-
-                          case "array-contains" /* Operator.ARRAY_CONTAINS */ :
-                            return [ t.value ];
-                            // Remaining filters are not array filters.
-                                                }
-                        return null;
-                    }
-                    /**
- * Returns the list of values that are used in != or NOT_IN filters. Returns
- * `null` if there are no such filters.
- */ (s, i), o = function __PRIVATE_targetGetNotInValues(e, t) {
-                        const n = new Map;
-                        for (const r of __PRIVATE_fieldIndexGetDirectionalSegments(t)) for (const t of __PRIVATE_targetGetFieldFiltersForPath(e, r.fieldPath)) switch (t.op) {
-                          case "==" /* Operator.EQUAL */ :
-                          case "in" /* Operator.IN */ :
-                            // Encode equality prefix, which is encoded in the index value before
-                            // the inequality (e.g. `a == 'a' && b != 'b'` is encoded to
-                            // `value != 'ab'`).
-                            n.set(r.fieldPath.canonicalString(), t.value);
-                            break;
-
-                          case "not-in" /* Operator.NOT_IN */ :
-                          case "!=" /* Operator.NOT_EQUAL */ :
-                            // NotIn/NotEqual is always a suffix. There cannot be any remaining
-                            // segments and hence we can return early here.
-                            return n.set(r.fieldPath.canonicalString(), t.value), Array.from(n.values());
-                            // Remaining filters cannot be used as notIn bounds.
-                                                }
-                        return null;
-                    }
-                    /**
- * Returns a lower bound of field values that can be used as a starting point to
- * scan the index defined by `fieldIndex`. Returns `MIN_VALUE` if no lower bound
- * exists.
- */ (s, i), a = function __PRIVATE_targetGetLowerBound(e, t) {
-                        const n = [];
-                        let r = true;
-                        // For each segment, retrieve a lower bound if there is a suitable filter or
-                        // startAt.
-                                                for (const i of __PRIVATE_fieldIndexGetDirectionalSegments(t)) {
-                            const t = 0 /* IndexKind.ASCENDING */ === i.kind ? __PRIVATE_targetGetAscendingBound(e, i.fieldPath, e.startAt) : __PRIVATE_targetGetDescendingBound(e, i.fieldPath, e.startAt);
-                            n.push(t.value), r && (r = t.inclusive);
-                        }
-                        return new Bound(n, r);
-                    }
-                    /**
- * Returns an upper bound of field values that can be used as an ending point
- * when scanning the index defined by `fieldIndex`. Returns `MAX_VALUE` if no
- * upper bound exists.
- */ (s, i), u = function __PRIVATE_targetGetUpperBound(e, t) {
-                        const n = [];
-                        let r = true;
-                        // For each segment, retrieve an upper bound if there is a suitable filter or
-                        // endAt.
-                                                for (const i of __PRIVATE_fieldIndexGetDirectionalSegments(t)) {
-                            const t = 0 /* IndexKind.ASCENDING */ === i.kind ? __PRIVATE_targetGetDescendingBound(e, i.fieldPath, e.endAt) : __PRIVATE_targetGetAscendingBound(e, i.fieldPath, e.endAt);
-                            n.push(t.value), r && (r = t.inclusive);
-                        }
-                        return new Bound(n, r);
-                    }(s, i), c = this.es(i, s, a), l = this.es(i, s, u), E = this.ts(i, s, o), h = this.ns(i.indexId, _, c, a.inclusive, l, u.inclusive, E);
-                    return PersistencePromise.forEach(h, (i => n.Y(i, t.limit).next((t => {
-                        t.forEach((t => {
-                            const n = DocumentKey.fromSegments(t.documentKey);
-                            e.has(n) || (e = e.add(n), r.push(n));
-                        }));
-                    }))));
-                })).next((() => r));
-            }
-            return PersistencePromise.resolve(null);
-        }));
-    }
-    Zi(e) {
-        let t = this.Yi.get(e);
-        if (t) return t;
-        if (0 === e.filters.length) t = [ e ]; else {
-            t = __PRIVATE_getDnfTerms(CompositeFilter.create(e.filters, "and" /* CompositeOperator.AND */)).map((t => __PRIVATE_newTarget(e.path, e.collectionGroup, e.orderBy, t.getFilters(), e.limit, e.startAt, e.endAt)));
-        }
-        return this.Yi.set(e, t), t;
-    }
-    /**
-     * Constructs a key range query on `DbIndexEntryStore` that unions all
-     * bounds.
-     */    ns(e, t, n, r, i, s, _) {
-        // The number of total index scans we union together. This is similar to a
-        // distributed normal form, but adapted for array values. We create a single
-        // index range per value in an ARRAY_CONTAINS or ARRAY_CONTAINS_ANY filter
-        // combined with the values from the query bounds.
-        const o = (null != t ? t.length : 1) * Math.max(n.length, i.length), a = o / (null != t ? t.length : 1), u = [];
-        for (let c = 0; c < o; ++c) {
-            const o = t ? this.rs(t[c / a]) : nn, l = this.ss(e, o, n[c % a], r), E = this._s(e, o, i[c % a], s), h = _.map((t => this.ss(e, o, t, 
-            /* inclusive= */ true)));
-            u.push(...this.createRange(l, E, h));
-        }
-        return u;
-    }
-    /** Generates the lower bound for `arrayValue` and `directionalValue`. */    ss(e, t, n, r) {
-        const i = new __PRIVATE_IndexEntry(e, DocumentKey.empty(), t, n);
-        return r ? i : i.Li();
-    }
-    /** Generates the upper bound for `arrayValue` and `directionalValue`. */    _s(e, t, n, r) {
-        const i = new __PRIVATE_IndexEntry(e, DocumentKey.empty(), t, n);
-        return r ? i.Li() : i;
-    }
-    Xi(e, t) {
-        const n = new __PRIVATE_TargetIndexMatcher(t), r = null != t.collectionGroup ? t.collectionGroup : t.path.lastSegment();
-        return this.getFieldIndexes(e, r).next((e => {
-            // Return the index with the most number of segments.
-            let t = null;
-            for (const r of e) {
-                n.Wi(r) && (!t || r.fields.length > t.fields.length) && (t = r);
-            }
-            return t;
-        }));
-    }
-    getIndexType(e, t) {
-        let n = 2 /* IndexType.FULL */;
-        const r = this.Zi(t);
-        return PersistencePromise.forEach(r, (t => this.Xi(e, t).next((e => {
-            e ? 0 /* IndexType.NONE */ !== n && e.fields.length < function __PRIVATE_targetGetSegmentCount(e) {
-                let t = new SortedSet(FieldPath$1.comparator), n = false;
-                for (const r of e.filters) for (const e of r.getFlattenedFilters()) 
-                // __name__ is not an explicit segment of any index, so we don't need to
-                // count it.
-                e.field.isKeyField() || (
-                // ARRAY_CONTAINS or ARRAY_CONTAINS_ANY filters must be counted separately.
-                // For instance, it is possible to have an index for "a ARRAY a ASC". Even
-                // though these are on the same field, they should be counted as two
-                // separate segments in an index.
-                "array-contains" /* Operator.ARRAY_CONTAINS */ === e.op || "array-contains-any" /* Operator.ARRAY_CONTAINS_ANY */ === e.op ? n = true : t = t.add(e.field));
-                for (const n of e.orderBy) 
-                // __name__ is not an explicit segment of any index, so we don't need to
-                // count it.
-                n.field.isKeyField() || (t = t.add(n.field));
-                return t.size + (n ? 1 : 0);
-            }(t) && (n = 1 /* IndexType.PARTIAL */) : n = 0 /* IndexType.NONE */;
-        })))).next((() => 
-        // OR queries have more than one sub-target (one sub-target per DNF term). We currently consider
-        // OR queries that have a `limit` to have a partial index. For such queries we perform sorting
-        // and apply the limit in memory as a post-processing step.
-        function __PRIVATE_targetHasLimit(e) {
-            return null !== e.limit;
-        }(t) && r.length > 1 && 2 /* IndexType.FULL */ === n ? 1 /* IndexType.PARTIAL */ : n));
-    }
-    /**
-     * Returns the byte encoded form of the directional values in the field index.
-     * Returns `null` if the document does not have all fields specified in the
-     * index.
-     */    us(e, t) {
-        const n = new __PRIVATE_IndexByteEncoder;
-        for (const r of __PRIVATE_fieldIndexGetDirectionalSegments(e)) {
-            const e = t.data.field(r.fieldPath);
-            if (null == e) return null;
-            const i = n.Ci(r.kind);
-            __PRIVATE_FirestoreIndexValueWriter.Ei.Yr(e, i);
-        }
-        return n.Di();
-    }
-    /** Encodes a single value to the ascending index format. */    rs(e) {
-        const t = new __PRIVATE_IndexByteEncoder;
-        return __PRIVATE_FirestoreIndexValueWriter.Ei.Yr(e, t.Ci(0 /* IndexKind.ASCENDING */)), 
-        t.Di();
-    }
-    /**
-     * Returns an encoded form of the document key that sorts based on the key
-     * ordering of the field index.
-     */    cs(e, t) {
-        const n = new __PRIVATE_IndexByteEncoder;
-        return __PRIVATE_FirestoreIndexValueWriter.Ei.Yr(__PRIVATE_refValue(this.databaseId, t), n.Ci(function __PRIVATE_fieldIndexGetKeyOrder(e) {
-            const t = __PRIVATE_fieldIndexGetDirectionalSegments(e);
-            return 0 === t.length ? 0 /* IndexKind.ASCENDING */ : t[t.length - 1].kind;
-        }(e))), n.Di();
-    }
-    /**
-     * Encodes the given field values according to the specification in `target`.
-     * For IN queries, a list of possible values is returned.
-     */    ts(e, t, n) {
-        if (null === n) return [];
-        let r = [];
-        r.push(new __PRIVATE_IndexByteEncoder);
-        let i = 0;
-        for (const s of __PRIVATE_fieldIndexGetDirectionalSegments(e)) {
-            const e = n[i++];
-            for (const n of r) if (this.ls(t, s.fieldPath) && isArray(e)) r = this.Es(r, s, e); else {
-                const t = n.Ci(s.kind);
-                __PRIVATE_FirestoreIndexValueWriter.Ei.Yr(e, t);
-            }
-        }
-        return this.hs(r);
-    }
-    /**
-     * Encodes the given bounds according to the specification in `target`. For IN
-     * queries, a list of possible values is returned.
-     */    es(e, t, n) {
-        return this.ts(e, t, n.position);
-    }
-    /** Returns the byte representation for the provided encoders. */    hs(e) {
-        const t = [];
-        for (let n = 0; n < e.length; ++n) t[n] = e[n].Di();
-        return t;
-    }
-    /**
-     * Creates a separate encoder for each element of an array.
-     *
-     * The method appends each value to all existing encoders (e.g. filter("a",
-     * "==", "a1").filter("b", "in", ["b1", "b2"]) becomes ["a1,b1", "a1,b2"]). A
-     * list of new encoders is returned.
-     */    Es(e, t, n) {
-        const r = [ ...e ], i = [];
-        for (const e of n.arrayValue.values || []) for (const n of r) {
-            const r = new __PRIVATE_IndexByteEncoder;
-            r.seed(n.Di()), __PRIVATE_FirestoreIndexValueWriter.Ei.Yr(e, r.Ci(t.kind)), i.push(r);
-        }
-        return i;
-    }
-    ls(e, t) {
-        return !!e.filters.find((e => e instanceof FieldFilter && e.field.isEqual(t) && ("in" /* Operator.IN */ === e.op || "not-in" /* Operator.NOT_IN */ === e.op)));
-    }
-    getFieldIndexes(e, t) {
-        const n = __PRIVATE_indexConfigurationStore(e), r = __PRIVATE_indexStateStore(e);
-        return (t ? n.H(ve, IDBKeyRange.bound(t, t)) : n.H()).next((e => {
-            const t = [];
-            return PersistencePromise.forEach(e, (e => r.get([ e.indexId, this.uid ]).next((n => {
-                t.push(function __PRIVATE_fromDbIndexConfiguration(e, t) {
-                    const n = t ? new IndexState(t.sequenceNumber, new IndexOffset(__PRIVATE_fromDbTimestamp(t.readTime), new DocumentKey(__PRIVATE_decodeResourcePath(t.documentKey)), t.largestBatchId)) : IndexState.empty(), r = e.fields.map((([e, t]) => new IndexSegment(FieldPath$1.fromServerFormat(e), t)));
-                    return new FieldIndex(e.indexId, e.collectionGroup, r, n);
-                }(e, n));
-            })))).next((() => t));
-        }));
-    }
-    getNextCollectionGroupToUpdate(e) {
-        return this.getFieldIndexes(e).next((e => 0 === e.length ? null : (e.sort(((e, t) => {
-            const n = e.indexState.sequenceNumber - t.indexState.sequenceNumber;
-            return 0 !== n ? n : __PRIVATE_primitiveComparator(e.collectionGroup, t.collectionGroup);
-        })), e[0].collectionGroup)));
-    }
-    updateCollectionGroup(e, t, n) {
-        const r = __PRIVATE_indexConfigurationStore(e), i = __PRIVATE_indexStateStore(e);
-        return this.Ts(e).next((e => r.H(ve, IDBKeyRange.bound(t, t)).next((t => PersistencePromise.forEach(t, (t => i.put(__PRIVATE_toDbIndexState(t.indexId, this.uid, e, n))))))));
-    }
-    updateIndexEntries(e, t) {
-        // Porting Note: `getFieldIndexes()` on Web does not cache index lookups as
-        // it could be used across different IndexedDB transactions. As any cached
-        // data might be invalidated by other multi-tab clients, we can only trust
-        // data within a single IndexedDB transaction. We therefore add a cache
-        // here.
-        const n = new Map;
-        return PersistencePromise.forEach(t, ((t, r) => {
-            const i = n.get(t.collectionGroup);
-            return (i ? PersistencePromise.resolve(i) : this.getFieldIndexes(e, t.collectionGroup)).next((i => (n.set(t.collectionGroup, i), 
-            PersistencePromise.forEach(i, (n => this.Ps(e, t, n).next((t => {
-                const i = this.Rs(r, n);
-                return t.isEqual(i) ? PersistencePromise.resolve() : this.Is(e, r, n, t, i);
-            })))))));
-        }));
-    }
-    As(e, t, n, r) {
-        return __PRIVATE_indexEntriesStore(e).put(r.Bi(this.uid, this.cs(n, t.key), t.key));
-    }
-    Vs(e, t, n, r) {
-        return __PRIVATE_indexEntriesStore(e).delete(r.Ui(this.uid, this.cs(n, t.key), t.key));
-    }
-    Ps(e, t, n) {
-        const r = __PRIVATE_indexEntriesStore(e);
-        let i = new SortedSet(__PRIVATE_indexEntryComparator);
-        return r.ee({
-            index: Ne,
-            range: IDBKeyRange.only([ n.indexId, this.uid, __PRIVATE_encodeKeySafeBytes(this.cs(n, t)) ])
-        }, ((e, r) => {
-            i = i.add(new __PRIVATE_IndexEntry(n.indexId, t, __PRIVATE_decodeKeySafeBytes(r.arrayValue), __PRIVATE_decodeKeySafeBytes(r.directionalValue)));
-        })).next((() => i));
-    }
-    /** Creates the index entries for the given document. */    Rs(e, t) {
-        let n = new SortedSet(__PRIVATE_indexEntryComparator);
-        const r = this.us(t, e);
-        if (null == r) return n;
-        const i = __PRIVATE_fieldIndexGetArraySegment(t);
-        if (null != i) {
-            const s = e.data.field(i.fieldPath);
-            if (isArray(s)) for (const i of s.arrayValue.values || []) n = n.add(new __PRIVATE_IndexEntry(t.indexId, e.key, this.rs(i), r));
-        } else n = n.add(new __PRIVATE_IndexEntry(t.indexId, e.key, nn, r));
-        return n;
-    }
-    /**
-     * Updates the index entries for the provided document by deleting entries
-     * that are no longer referenced in `newEntries` and adding all newly added
-     * entries.
-     */    Is(e, t, n, r, i) {
-        __PRIVATE_logDebug(tn, "Updating index entries for document '%s'", t.key);
-        const s = [];
-        return function __PRIVATE_diffSortedSets(e, t, n, r, i) {
-            const s = e.getIterator(), _ = t.getIterator();
-            let o = __PRIVATE_advanceIterator(s), a = __PRIVATE_advanceIterator(_);
-            // Walk through the two sets at the same time, using the ordering defined by
-            // `comparator`.
-            for (;o || a; ) {
-                let e = false, t = false;
-                if (o && a) {
-                    const r = n(o, a);
-                    r < 0 ? 
-                    // The element was removed if the next element in our ordered
-                    // walkthrough is only in `before`.
-                    t = true : r > 0 && (
-                    // The element was added if the next element in our ordered walkthrough
-                    // is only in `after`.
-                    e = true);
-                } else null != o ? t = true : e = true;
-                e ? (r(a), a = __PRIVATE_advanceIterator(_)) : t ? (i(o), o = __PRIVATE_advanceIterator(s)) : (o = __PRIVATE_advanceIterator(s), 
-                a = __PRIVATE_advanceIterator(_));
-            }
-        }(r, i, __PRIVATE_indexEntryComparator, (
-        /* onAdd= */ r => {
-            s.push(this.As(e, t, n, r));
-        }), (
-        /* onRemove= */ r => {
-            s.push(this.Vs(e, t, n, r));
-        })), PersistencePromise.waitFor(s);
-    }
-    Ts(e) {
-        let t = 1;
-        return __PRIVATE_indexStateStore(e).ee({
-            index: Ce,
-            reverse: true,
-            range: IDBKeyRange.upperBound([ this.uid, Number.MAX_SAFE_INTEGER ])
-        }, ((e, n, r) => {
-            r.done(), t = n.sequenceNumber + 1;
-        })).next((() => t));
-    }
-    /**
-     * Returns a new set of IDB ranges that splits the existing range and excludes
-     * any values that match the `notInValue` from these ranges. As an example,
-     * '[foo > 2 && foo != 3]` becomes  `[foo > 2 && < 3, foo > 3]`.
-     */    createRange(e, t, n) {
-        // The notIn values need to be sorted and unique so that we can return a
-        // sorted set of non-overlapping ranges.
-        n = n.sort(((e, t) => __PRIVATE_indexEntryComparator(e, t))).filter(((e, t, n) => !t || 0 !== __PRIVATE_indexEntryComparator(e, n[t - 1])));
-        const r = [];
-        r.push(e);
-        for (const i of n) {
-            const n = __PRIVATE_indexEntryComparator(i, e), s = __PRIVATE_indexEntryComparator(i, t);
-            if (0 === n) 
-            // `notInValue` is the lower bound. We therefore need to raise the bound
-            // to the next value.
-            r[0] = e.Li(); else if (n > 0 && s < 0) 
-            // `notInValue` is in the middle of the range
-            r.push(i), r.push(i.Li()); else if (s > 0) 
-            // `notInValue` (and all following values) are out of the range
-            break;
-        }
-        r.push(t);
-        const i = [];
-        for (let e = 0; e < r.length; e += 2) {
-            // If we encounter two bounds that will create an unmatchable key range,
-            // then we return an empty set of key ranges.
-            if (this.ds(r[e], r[e + 1])) return [];
-            const t = r[e].Ui(this.uid, nn, DocumentKey.empty()), n = r[e + 1].Ui(this.uid, nn, DocumentKey.empty());
-            i.push(IDBKeyRange.bound(t, n));
-        }
-        return i;
-    }
-    ds(e, t) {
-        // If lower bound is greater than the upper bound, then the key
-        // range can never be matched.
-        return __PRIVATE_indexEntryComparator(e, t) > 0;
-    }
-    getMinOffsetFromCollectionGroup(e, t) {
-        return this.getFieldIndexes(e, t).next(__PRIVATE_getMinOffsetFromFieldIndexes);
-    }
-    getMinOffset(e, t) {
-        return PersistencePromise.mapArray(this.Zi(t), (t => this.Xi(e, t).next((e => e || fail(44426))))).next(__PRIVATE_getMinOffsetFromFieldIndexes);
-    }
-}
-
-/**
- * Helper to get a typed SimpleDbStore for the collectionParents
- * document store.
- */ function __PRIVATE_collectionParentsStore(e) {
-    return __PRIVATE_getStore(e, Ae);
-}
-
-/**
- * Helper to get a typed SimpleDbStore for the index entry object store.
- */ function __PRIVATE_indexEntriesStore(e) {
-    return __PRIVATE_getStore(e, Oe);
-}
-
-/**
- * Helper to get a typed SimpleDbStore for the index configuration object store.
- */ function __PRIVATE_indexConfigurationStore(e) {
-    return __PRIVATE_getStore(e, we);
-}
-
-/**
- * Helper to get a typed SimpleDbStore for the index state object store.
- */ function __PRIVATE_indexStateStore(e) {
-    return __PRIVATE_getStore(e, De);
-}
-
-function __PRIVATE_getMinOffsetFromFieldIndexes(e) {
-    __PRIVATE_hardAssert(0 !== e.length, 28825);
-    let t = e[0].indexState.offset, n = t.largestBatchId;
-    for (let r = 1; r < e.length; r++) {
-        const i = e[r].indexState.offset;
-        __PRIVATE_indexOffsetComparator(i, t) < 0 && (t = i), n < i.largestBatchId && (n = i.largestBatchId);
-    }
-    return new IndexOffset(t.readTime, t.documentKey, n);
-}
-
-/**
- * @license
- * Copyright 2020 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-/**
- * Delete a mutation batch and the associated document mutations.
- * @returns A PersistencePromise of the document mutations that were removed.
- */ function removeMutationBatch(e, t, n) {
-    const r = e.store(H), i = e.store(ee), s = [], _ = IDBKeyRange.only(n.batchId);
-    let o = 0;
-    const a = r.ee({
-        range: _
-    }, ((e, t, n) => (o++, n.delete())));
-    s.push(a.next((() => {
-        __PRIVATE_hardAssert(1 === o, 47070, {
-            batchId: n.batchId
-        });
-    })));
-    const u = [];
-    for (const e of n.mutations) {
-        const r = __PRIVATE_newDbDocumentMutationKey(t, e.key.path, n.batchId);
-        s.push(i.delete(r)), u.push(e.key);
-    }
-    return PersistencePromise.waitFor(s).next((() => u));
-}
-
-/**
- * Returns an approximate size for the given document.
- */ function __PRIVATE_dbDocumentSize(e) {
-    if (!e) return 0;
-    let t;
-    if (e.document) t = e.document; else if (e.unknownDocument) t = e.unknownDocument; else {
-        if (!e.noDocument) throw fail(14731);
-        t = e.noDocument;
-    }
-    return JSON.stringify(t).length;
-}
-
-/**
- * @license
- * Copyright 2017 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-/** A mutation queue for a specific user, backed by IndexedDB. */ class __PRIVATE_IndexedDbMutationQueue {
-    constructor(
-    /**
-     * The normalized userId (e.g. null UID => "" userId) used to store /
-     * retrieve mutations.
-     */
-    e, t, n, r) {
-        this.userId = e, this.serializer = t, this.indexManager = n, this.referenceDelegate = r, 
-        /**
-         * Caches the document keys for pending mutation batches. If the mutation
-         * has been removed from IndexedDb, the cached value may continue to
-         * be used to retrieve the batch's document keys. To remove a cached value
-         * locally, `removeCachedMutationKeys()` should be invoked either directly
-         * or through `removeMutationBatches()`.
-         *
-         * With multi-tab, when the primary client acknowledges or rejects a mutation,
-         * this cache is used by secondary clients to invalidate the local
-         * view of the documents that were previously affected by the mutation.
-         */
-        // PORTING NOTE: Multi-tab only.
-        this.fs = {};
-    }
-    /**
-     * Creates a new mutation queue for the given user.
-     * @param user - The user for which to create a mutation queue.
-     * @param serializer - The serializer to use when persisting to IndexedDb.
-     */    static jr(e, t, n, r) {
-        // TODO(mcg): Figure out what constraints there are on userIDs
-        // In particular, are there any reserved characters? are empty ids allowed?
-        // For the moment store these together in the same mutations table assuming
-        // that empty userIDs aren't allowed.
-        __PRIVATE_hardAssert("" !== e.uid, 64387);
-        const i = e.isAuthenticated() ? e.uid : "";
-        return new __PRIVATE_IndexedDbMutationQueue(i, t, n, r);
-    }
-    checkEmpty(e) {
-        let t = true;
-        const n = IDBKeyRange.bound([ this.userId, Number.NEGATIVE_INFINITY ], [ this.userId, Number.POSITIVE_INFINITY ]);
-        return __PRIVATE_mutationsStore(e).ee({
-            index: Y,
-            range: n
-        }, ((e, n, r) => {
-            t = false, r.done();
-        })).next((() => t));
-    }
-    addMutationBatch(e, t, n, r) {
-        const i = __PRIVATE_documentMutationsStore(e), s = __PRIVATE_mutationsStore(e);
-        // The IndexedDb implementation in Chrome (and Firefox) does not handle
-        // compound indices that include auto-generated keys correctly. To ensure
-        // that the index entry is added correctly in all browsers, we perform two
-        // writes: The first write is used to retrieve the next auto-generated Batch
-        // ID, and the second write populates the index and stores the actual
-        // mutation batch.
-        // See: https://bugs.chromium.org/p/chromium/issues/detail?id=701972
-        // We write an empty object to obtain key
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return s.add({}).next((_ => {
-            __PRIVATE_hardAssert("number" == typeof _, 49019);
-            const o = new MutationBatch(_, t, n, r), a = function __PRIVATE_toDbMutationBatch(e, t, n) {
-                const r = n.baseMutations.map((t => toMutation(e.zr, t))), i = n.mutations.map((t => toMutation(e.zr, t)));
-                return {
-                    userId: t,
-                    batchId: n.batchId,
-                    localWriteTimeMs: n.localWriteTime.toMillis(),
-                    baseMutations: r,
-                    mutations: i
-                };
-            }(this.serializer, this.userId, o), u = [];
-            let c = new SortedSet(((e, t) => __PRIVATE_primitiveComparator(e.canonicalString(), t.canonicalString())));
-            for (const e of r) {
-                const t = __PRIVATE_newDbDocumentMutationKey(this.userId, e.key.path, _);
-                c = c.add(e.key.path.popLast()), u.push(s.put(a)), u.push(i.put(t, X));
-            }
-            return c.forEach((t => {
-                u.push(this.indexManager.addToCollectionParentIndex(e, t));
-            })), e.addOnCommittedListener((() => {
-                this.fs[_] = o.keys();
-            })), PersistencePromise.waitFor(u).next((() => o));
-        }));
-    }
-    lookupMutationBatch(e, t) {
-        return __PRIVATE_mutationsStore(e).get(t).next((e => e ? (__PRIVATE_hardAssert(e.userId === this.userId, 48, "Unexpected user for mutation batch", {
-            userId: e.userId,
-            batchId: t
-        }), __PRIVATE_fromDbMutationBatch(this.serializer, e)) : null));
-    }
-    /**
-     * Returns the document keys for the mutation batch with the given batchId.
-     * For primary clients, this method returns `null` after
-     * `removeMutationBatches()` has been called. Secondary clients return a
-     * cached result until `removeCachedMutationKeys()` is invoked.
-     */
-    // PORTING NOTE: Multi-tab only.
-    ps(e, t) {
-        return this.fs[t] ? PersistencePromise.resolve(this.fs[t]) : this.lookupMutationBatch(e, t).next((e => {
-            if (e) {
-                const n = e.keys();
-                return this.fs[t] = n, n;
-            }
-            return null;
-        }));
-    }
-    getNextMutationBatchAfterBatchId(e, t) {
-        const n = t + 1, r = IDBKeyRange.lowerBound([ this.userId, n ]);
-        let i = null;
-        return __PRIVATE_mutationsStore(e).ee({
-            index: Y,
-            range: r
-        }, ((e, t, r) => {
-            t.userId === this.userId && (__PRIVATE_hardAssert(t.batchId >= n, 47524, {
-                gs: n
-            }), i = __PRIVATE_fromDbMutationBatch(this.serializer, t)), r.done();
-        })).next((() => i));
-    }
-    getHighestUnacknowledgedBatchId(e) {
-        const t = IDBKeyRange.upperBound([ this.userId, Number.POSITIVE_INFINITY ]);
-        let n = $;
-        return __PRIVATE_mutationsStore(e).ee({
-            index: Y,
-            range: t,
-            reverse: true
-        }, ((e, t, r) => {
-            n = t.batchId, r.done();
-        })).next((() => n));
-    }
-    getAllMutationBatches(e) {
-        const t = IDBKeyRange.bound([ this.userId, $ ], [ this.userId, Number.POSITIVE_INFINITY ]);
-        return __PRIVATE_mutationsStore(e).H(Y, t).next((e => e.map((e => __PRIVATE_fromDbMutationBatch(this.serializer, e)))));
-    }
-    getAllMutationBatchesAffectingDocumentKey(e, t) {
-        // Scan the document-mutation index starting with a prefix starting with
-        // the given documentKey.
-        const n = __PRIVATE_newDbDocumentMutationPrefixForPath(this.userId, t.path), r = IDBKeyRange.lowerBound(n), i = [];
-        return __PRIVATE_documentMutationsStore(e).ee({
-            range: r
-        }, ((n, r, s) => {
-            const [_, o, a] = n, u = __PRIVATE_decodeResourcePath(o);
-            // Only consider rows matching exactly the specific key of
-            // interest. Note that because we order by path first, and we
-            // order terminators before path separators, we'll encounter all
-            // the index rows for documentKey contiguously. In particular, all
-            // the rows for documentKey will occur before any rows for
-            // documents nested in a subcollection beneath documentKey so we
-            // can stop as soon as we hit any such row.
-                        if (_ === this.userId && t.path.isEqual(u)) 
-            // Look up the mutation batch in the store.
-            return __PRIVATE_mutationsStore(e).get(a).next((e => {
-                if (!e) throw fail(61480, {
-                    ys: n,
-                    batchId: a
-                });
-                __PRIVATE_hardAssert(e.userId === this.userId, 10503, "Unexpected user for mutation batch", {
-                    userId: e.userId,
-                    batchId: a
-                }), i.push(__PRIVATE_fromDbMutationBatch(this.serializer, e));
-            }));
-            s.done();
-        })).next((() => i));
-    }
-    getAllMutationBatchesAffectingDocumentKeys(e, t) {
-        let n = new SortedSet(__PRIVATE_primitiveComparator);
-        const r = [];
-        return t.forEach((t => {
-            const i = __PRIVATE_newDbDocumentMutationPrefixForPath(this.userId, t.path), s = IDBKeyRange.lowerBound(i), _ = __PRIVATE_documentMutationsStore(e).ee({
-                range: s
-            }, ((e, r, i) => {
-                const [s, _, o] = e, a = __PRIVATE_decodeResourcePath(_);
-                // Only consider rows matching exactly the specific key of
-                // interest. Note that because we order by path first, and we
-                // order terminators before path separators, we'll encounter all
-                // the index rows for documentKey contiguously. In particular, all
-                // the rows for documentKey will occur before any rows for
-                // documents nested in a subcollection beneath documentKey so we
-                // can stop as soon as we hit any such row.
-                                s === this.userId && t.path.isEqual(a) ? n = n.add(o) : i.done();
-            }));
-            r.push(_);
-        })), PersistencePromise.waitFor(r).next((() => this.ws(e, n)));
-    }
-    getAllMutationBatchesAffectingQuery(e, t) {
-        const n = t.path, r = n.length + 1, i = __PRIVATE_newDbDocumentMutationPrefixForPath(this.userId, n), s = IDBKeyRange.lowerBound(i);
-        // Collect up unique batchIDs encountered during a scan of the index. Use a
-        // SortedSet to accumulate batch IDs so they can be traversed in order in a
-        // scan of the main table.
-        let _ = new SortedSet(__PRIVATE_primitiveComparator);
-        return __PRIVATE_documentMutationsStore(e).ee({
-            range: s
-        }, ((e, t, i) => {
-            const [s, o, a] = e, u = __PRIVATE_decodeResourcePath(o);
-            s === this.userId && n.isPrefixOf(u) ? 
-            // Rows with document keys more than one segment longer than the
-            // query path can't be matches. For example, a query on 'rooms'
-            // can't match the document /rooms/abc/messages/xyx.
-            // TODO(mcg): we'll need a different scanner when we implement
-            // ancestor queries.
-            u.length === r && (_ = _.add(a)) : i.done();
-        })).next((() => this.ws(e, _)));
-    }
-    ws(e, t) {
-        const n = [], r = [];
-        // TODO(rockwood): Implement this using iterate.
-        return t.forEach((t => {
-            r.push(__PRIVATE_mutationsStore(e).get(t).next((e => {
-                if (null === e) throw fail(35274, {
-                    batchId: t
-                });
-                __PRIVATE_hardAssert(e.userId === this.userId, 9748, "Unexpected user for mutation batch", {
-                    userId: e.userId,
-                    batchId: t
-                }), n.push(__PRIVATE_fromDbMutationBatch(this.serializer, e));
-            })));
-        })), PersistencePromise.waitFor(r).next((() => n));
-    }
-    removeMutationBatch(e, t) {
-        return removeMutationBatch(e.le, this.userId, t).next((n => (e.addOnCommittedListener((() => {
-            this.bs(t.batchId);
-        })), PersistencePromise.forEach(n, (t => this.referenceDelegate.markPotentiallyOrphaned(e, t))))));
-    }
-    /**
-     * Clears the cached keys for a mutation batch. This method should be
-     * called by secondary clients after they process mutation updates.
-     *
-     * Note that this method does not have to be called from primary clients as
-     * the corresponding cache entries are cleared when an acknowledged or
-     * rejected batch is removed from the mutation queue.
-     */
-    // PORTING NOTE: Multi-tab only
-    bs(e) {
-        delete this.fs[e];
-    }
-    performConsistencyCheck(e) {
-        return this.checkEmpty(e).next((t => {
-            if (!t) return PersistencePromise.resolve();
-            // Verify that there are no entries in the documentMutations index if
-            // the queue is empty.
-                        const n = IDBKeyRange.lowerBound(
-            /**
- * Creates a [userId] key for use in the DbDocumentMutations index to iterate
- * over all of a user's document mutations.
- */
-            function __PRIVATE_newDbDocumentMutationPrefixForUser(e) {
-                return [ e ];
-            }(this.userId)), r = [];
-            return __PRIVATE_documentMutationsStore(e).ee({
-                range: n
-            }, ((e, t, n) => {
-                if (e[0] === this.userId) {
-                    const t = __PRIVATE_decodeResourcePath(e[1]);
-                    r.push(t);
-                } else n.done();
-            })).next((() => {
-                __PRIVATE_hardAssert(0 === r.length, 56720, {
-                    vs: r.map((e => e.canonicalString()))
-                });
-            }));
-        }));
-    }
-    containsKey(e, t) {
-        return __PRIVATE_mutationQueueContainsKey(e, this.userId, t);
-    }
-    // PORTING NOTE: Multi-tab only (state is held in memory in other clients).
-    /** Returns the mutation queue's metadata from IndexedDb. */
-    Ss(e) {
-        return __PRIVATE_mutationQueuesStore(e).get(this.userId).next((e => e || {
-            userId: this.userId,
-            lastAcknowledgedBatchId: $,
-            lastStreamToken: ""
-        }));
-    }
-}
-
-/**
- * @returns true if the mutation queue for the given user contains a pending
- *         mutation for the given key.
- */ function __PRIVATE_mutationQueueContainsKey(e, t, n) {
-    const r = __PRIVATE_newDbDocumentMutationPrefixForPath(t, n.path), i = r[1], s = IDBKeyRange.lowerBound(r);
-    let _ = false;
-    return __PRIVATE_documentMutationsStore(e).ee({
-        range: s,
-        X: true
-    }, ((e, n, r) => {
-        const [s, o, /*batchID*/ a] = e;
-        s === t && o === i && (_ = true), r.done();
-    })).next((() => _));
-}
-
-/** Returns true if any mutation queue contains the given document. */
-/**
- * Helper to get a typed SimpleDbStore for the mutations object store.
- */
-function __PRIVATE_mutationsStore(e) {
-    return __PRIVATE_getStore(e, H);
-}
-
-/**
- * Helper to get a typed SimpleDbStore for the mutationQueues object store.
- */ function __PRIVATE_documentMutationsStore(e) {
-    return __PRIVATE_getStore(e, ee);
-}
-
-/**
- * Helper to get a typed SimpleDbStore for the mutationQueues object store.
- */ function __PRIVATE_mutationQueuesStore(e) {
-    return __PRIVATE_getStore(e, z);
-}
-
-/**
- * @license
  * Copyright 2017 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -31761,338 +28433,6 @@ class __PRIVATE_TargetIdGenerator {
     }
 }
 
-/**
- * @license
- * Copyright 2017 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */ class __PRIVATE_IndexedDbTargetCache {
-    constructor(e, t) {
-        this.referenceDelegate = e, this.serializer = t;
-    }
-    // PORTING NOTE: We don't cache global metadata for the target cache, since
-    // some of it (in particular `highestTargetId`) can be modified by secondary
-    // tabs. We could perhaps be more granular (and e.g. still cache
-    // `lastRemoteSnapshotVersion` in memory) but for simplicity we currently go
-    // to IndexedDb whenever we need to read metadata. We can revisit if it turns
-    // out to have a meaningful performance impact.
-    allocateTargetId(e) {
-        return this.Fs(e).next((t => {
-            const n = new __PRIVATE_TargetIdGenerator(t.highestTargetId);
-            return t.highestTargetId = n.next(), this.Os(e, t).next((() => t.highestTargetId));
-        }));
-    }
-    getLastRemoteSnapshotVersion(e) {
-        return this.Fs(e).next((e => SnapshotVersion.fromTimestamp(new Timestamp(e.lastRemoteSnapshotVersion.seconds, e.lastRemoteSnapshotVersion.nanoseconds))));
-    }
-    getHighestSequenceNumber(e) {
-        return this.Fs(e).next((e => e.highestListenSequenceNumber));
-    }
-    setTargetsMetadata(e, t, n) {
-        return this.Fs(e).next((r => (r.highestListenSequenceNumber = t, n && (r.lastRemoteSnapshotVersion = n.toTimestamp()), 
-        t > r.highestListenSequenceNumber && (r.highestListenSequenceNumber = t), this.Os(e, r))));
-    }
-    addTargetData(e, t) {
-        return this.Ms(e, t).next((() => this.Fs(e).next((n => (n.targetCount += 1, this.Ns(t, n), 
-        this.Os(e, n))))));
-    }
-    updateTargetData(e, t) {
-        return this.Ms(e, t);
-    }
-    removeTargetData(e, t) {
-        return this.removeMatchingKeysForTargetId(e, t.targetId).next((() => __PRIVATE_targetsStore(e).delete(t.targetId))).next((() => this.Fs(e))).next((t => (__PRIVATE_hardAssert(t.targetCount > 0, 8065), 
-        t.targetCount -= 1, this.Os(e, t))));
-    }
-    /**
-     * Drops any targets with sequence number less than or equal to the upper bound, excepting those
-     * present in `activeTargetIds`. Document associations for the removed targets are also removed.
-     * Returns the number of targets removed.
-     */    removeTargets(e, t, n) {
-        let r = 0;
-        const i = [];
-        return __PRIVATE_targetsStore(e).ee(((s, _) => {
-            const o = __PRIVATE_fromDbTarget(this.serializer, _);
-            o.sequenceNumber <= t && null === n.get(o.targetId) && (r++, i.push(this.removeTargetData(e, o)));
-        })).next((() => PersistencePromise.waitFor(i))).next((() => r));
-    }
-    /**
-     * Call provided function with each `TargetData` that we have cached.
-     */    forEachTarget(e, t) {
-        return __PRIVATE_targetsStore(e).ee(((e, n) => {
-            const r = __PRIVATE_fromDbTarget(this.serializer, n);
-            t(r);
-        }));
-    }
-    Fs(e) {
-        return __PRIVATE_globalTargetStore(e).get(Re).next((e => (__PRIVATE_hardAssert(null !== e, 2888), 
-        e)));
-    }
-    Os(e, t) {
-        return __PRIVATE_globalTargetStore(e).put(Re, t);
-    }
-    Ms(e, t) {
-        return __PRIVATE_targetsStore(e).put(__PRIVATE_toDbTarget(this.serializer, t));
-    }
-    /**
-     * In-place updates the provided metadata to account for values in the given
-     * TargetData. Saving is done separately. Returns true if there were any
-     * changes to the metadata.
-     */    Ns(e, t) {
-        let n = false;
-        return e.targetId > t.highestTargetId && (t.highestTargetId = e.targetId, n = true), 
-        e.sequenceNumber > t.highestListenSequenceNumber && (t.highestListenSequenceNumber = e.sequenceNumber, 
-        n = true), n;
-    }
-    getTargetCount(e) {
-        return this.Fs(e).next((e => e.targetCount));
-    }
-    getTargetData(e, t) {
-        // Iterating by the canonicalId may yield more than one result because
-        // canonicalId values are not required to be unique per target. This query
-        // depends on the queryTargets index to be efficient.
-        const n = __PRIVATE_canonifyTargetOrPipeline(t), r = IDBKeyRange.bound([ n, Number.NEGATIVE_INFINITY ], [ n, Number.POSITIVE_INFINITY ]);
-        let i = null;
-        return __PRIVATE_targetsStore(e).ee({
-            range: r,
-            index: ce
-        }, ((e, n, r) => {
-            const s = __PRIVATE_fromDbTarget(this.serializer, n);
-            // After finding a potential match, check that the target is
-            // actually equal to the requested target.
-                        __PRIVATE_targetOrPipelineEqual(t, s.target) && (i = s, r.done());
-        })).next((() => i));
-    }
-    addMatchingKeys(e, t, n) {
-        // PORTING NOTE: The reverse index (documentsTargets) is maintained by
-        // IndexedDb.
-        const r = [], i = __PRIVATE_documentTargetStore(e);
-        return t.forEach((t => {
-            const s = __PRIVATE_encodeResourcePath(t.path);
-            r.push(i.put({
-                targetId: n,
-                path: s
-            })), r.push(this.referenceDelegate.addReference(e, n, t));
-        })), PersistencePromise.waitFor(r);
-    }
-    removeMatchingKeys(e, t, n) {
-        // PORTING NOTE: The reverse index (documentsTargets) is maintained by
-        // IndexedDb.
-        const r = __PRIVATE_documentTargetStore(e);
-        return PersistencePromise.forEach(t, (t => {
-            const i = __PRIVATE_encodeResourcePath(t.path);
-            return PersistencePromise.waitFor([ r.delete([ n, i ]), this.referenceDelegate.removeReference(e, n, t) ]);
-        }));
-    }
-    removeMatchingKeysForTargetId(e, t) {
-        const n = __PRIVATE_documentTargetStore(e), r = IDBKeyRange.bound([ t ], [ t + 1 ], 
-        /*lowerOpen=*/ false, 
-        /*upperOpen=*/ true);
-        return n.delete(r);
-    }
-    getMatchingKeysForTargetId(e, t) {
-        const n = IDBKeyRange.bound([ t ], [ t + 1 ], 
-        /*lowerOpen=*/ false, 
-        /*upperOpen=*/ true), r = __PRIVATE_documentTargetStore(e);
-        let i = __PRIVATE_documentKeySet();
-        return r.ee({
-            range: n,
-            X: true
-        }, ((e, t, n) => {
-            const r = __PRIVATE_decodeResourcePath(e[1]), s = new DocumentKey(r);
-            i = i.add(s);
-        })).next((() => i));
-    }
-    containsKey(e, t) {
-        const n = __PRIVATE_encodeResourcePath(t.path), r = IDBKeyRange.bound([ n ], [ __PRIVATE_immediateSuccessor(n) ], 
-        /*lowerOpen=*/ false, 
-        /*upperOpen=*/ true);
-        let i = 0;
-        return __PRIVATE_documentTargetStore(e).ee({
-            index: Te,
-            X: true,
-            range: r
-        }, (([e, t], n, r) => {
-            // Having a sentinel row for a document does not count as containing that document;
-            // For the target cache, containing the document means the document is part of some
-            // target.
-            0 !== e && (i++, r.done());
-        })).next((() => i > 0));
-    }
-    /**
-     * Looks up a TargetData entry by target ID.
-     *
-     * @param targetId - The target ID of the TargetData entry to look up.
-     * @returns The cached TargetData entry, or null if the cache has no entry for
-     * the target.
-     */
-    // PORTING NOTE: Multi-tab only.
-    dt(e, t) {
-        return __PRIVATE_targetsStore(e).get(t).next((e => e ? __PRIVATE_fromDbTarget(this.serializer, e) : null));
-    }
-}
-
-/**
- * Helper to get a typed SimpleDbStore for the queries object store.
- */ function __PRIVATE_targetsStore(e) {
-    return __PRIVATE_getStore(e, ue);
-}
-
-/**
- * Helper to get a typed SimpleDbStore for the target globals object store.
- */ function __PRIVATE_globalTargetStore(e) {
-    return __PRIVATE_getStore(e, Ie);
-}
-
-/**
- * Helper to get a typed SimpleDbStore for the document target object store.
- */ function __PRIVATE_documentTargetStore(e) {
-    return __PRIVATE_getStore(e, Ee);
-}
-
-/**
- * @license
- * Copyright 2020 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-/** Provides LRU functionality for IndexedDB persistence. */ class __PRIVATE_IndexedDbLruDelegateImpl {
-    constructor(e, t) {
-        this.db = e, this.garbageCollector = __PRIVATE_newLruGarbageCollector(this, t);
-    }
-    lr(e) {
-        const t = this.Ls(e);
-        return this.db.getTargetCache().getTargetCount(e).next((e => t.next((t => e + t))));
-    }
-    Ls(e) {
-        let t = 0;
-        return this.Er(e, (e => {
-            t++;
-        })).next((() => t));
-    }
-    forEachTarget(e, t) {
-        return this.db.getTargetCache().forEachTarget(e, t);
-    }
-    Er(e, t) {
-        return this.Bs(e, ((e, n) => t(n)));
-    }
-    addReference(e, t, n) {
-        return __PRIVATE_writeSentinelKey(e, n);
-    }
-    removeReference(e, t, n) {
-        return __PRIVATE_writeSentinelKey(e, n);
-    }
-    removeTargets(e, t, n) {
-        return this.db.getTargetCache().removeTargets(e, t, n);
-    }
-    markPotentiallyOrphaned(e, t) {
-        return __PRIVATE_writeSentinelKey(e, t);
-    }
-    /**
-     * Returns true if anything would prevent this document from being garbage
-     * collected, given that the document in question is not present in any
-     * targets and has a sequence number less than or equal to the upper bound for
-     * the collection run.
-     */    Us(e, t) {
-        return function __PRIVATE_mutationQueuesContainKey(e, t) {
-            let n = false;
-            return __PRIVATE_mutationQueuesStore(e).te((r => __PRIVATE_mutationQueueContainsKey(e, r, t).next((e => (e && (n = true), 
-            PersistencePromise.resolve(!e)))))).next((() => n));
-        }(e, t);
-    }
-    removeOrphanedDocuments(e, t) {
-        const n = this.db.getRemoteDocumentCache().newChangeBuffer(), r = [];
-        let i = 0;
-        return this.Bs(e, ((s, _) => {
-            if (_ <= t) {
-                const t = this.Us(e, s).next((t => {
-                    if (!t) 
-                    // Our size accounting requires us to read all documents before
-                    // removing them.
-                    return i++, n.getEntry(e, s).next((() => (n.removeEntry(s, SnapshotVersion.min()), 
-                    __PRIVATE_documentTargetStore(e).delete(function __PRIVATE_sentinelKey$1(e) {
-                        return [ 0, __PRIVATE_encodeResourcePath(e.path) ];
-                    }
-                    /**
- * @returns A value suitable for writing a sentinel row in the target-document
- * store.
- */ (s)))));
-                }));
-                r.push(t);
-            }
-        })).next((() => PersistencePromise.waitFor(r))).next((() => n.apply(e))).next((() => i));
-    }
-    removeTarget(e, t) {
-        const n = t.withSequenceNumber(e.currentSequenceNumber);
-        return this.db.getTargetCache().updateTargetData(e, n);
-    }
-    updateLimboDocument(e, t) {
-        return __PRIVATE_writeSentinelKey(e, t);
-    }
-    /**
-     * Call provided function for each document in the cache that is 'orphaned'. Orphaned
-     * means not a part of any target, so the only entry in the target-document index for
-     * that document will be the sentinel row (targetId 0), which will also have the sequence
-     * number for the last time the document was accessed.
-     */    Bs(e, t) {
-        const n = __PRIVATE_documentTargetStore(e);
-        let r, i = __PRIVATE_ListenSequence.ce;
-        return n.ee({
-            index: Te
-        }, (([e, n], {path: s, sequenceNumber: _}) => {
-            0 === e ? (
-            // if nextToReport is valid, report it, this is a new key so the
-            // last one must not be a member of any targets.
-            i !== __PRIVATE_ListenSequence.ce && t(new DocumentKey(__PRIVATE_decodeResourcePath(r)), i), 
-            // set nextToReport to be this sequence number. It's the next one we
-            // might report, if we don't find any targets for this document.
-            // Note that the sequence number must be defined when the targetId
-            // is 0.
-            i = _, r = s) : 
-            // set nextToReport to be invalid, we know we don't need to report
-            // this one since we found a target for it.
-            i = __PRIVATE_ListenSequence.ce;
-        })).next((() => {
-            // Since we report sequence numbers after getting to the next key, we
-            // need to check if the last key we iterated over was an orphaned
-            // document and report it.
-            i !== __PRIVATE_ListenSequence.ce && t(new DocumentKey(__PRIVATE_decodeResourcePath(r)), i);
-        }));
-    }
-    getCacheSize(e) {
-        return this.db.getRemoteDocumentCache().getSize(e);
-    }
-}
-
-function __PRIVATE_writeSentinelKey(e, t) {
-    return __PRIVATE_documentTargetStore(e).put(function __PRIVATE_sentinelRow(e, t) {
-        return {
-            targetId: 0,
-            path: __PRIVATE_encodeResourcePath(e.path),
-            sequenceNumber: t
-        };
-    }(t, e.currentSequenceNumber));
-}
-
 // Copyright 2024 Google LLC* @license
 function __PRIVATE_runPipeline(e, t) {
     let n = t;
@@ -32107,10 +28447,6 @@ function __PRIVATE_pipelineMatches(e, t) {
     // TODO(pipeline): this is not true for aggregations, and we need to examine if there are other
     // stages that will not work this way.
     return __PRIVATE_runPipeline(e, [ t ]).length > 0;
-}
-
-function __PRIVATE_queryOrPipelineMatches(e, t) {
-    return __PRIVATE_isPipeline(e) ? __PRIVATE_pipelineMatches(e, t) : __PRIVATE_queryMatches(e, t);
 }
 
 function evaluate(e, t, n) {
@@ -32274,318 +28610,6 @@ function __PRIVATE_newPipelineComparator(e) {
         return this.assertNotApplied(), this.changesApplied = true, this.applyChanges(e);
     }
     /** Helper to assert this.changes is not null  */    assertNotApplied() {}
-}
-
-/**
- * @license
- * Copyright 2017 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-/**
- * The RemoteDocumentCache for IndexedDb. To construct, invoke
- * `newIndexedDbRemoteDocumentCache()`.
- */ class __PRIVATE_IndexedDbRemoteDocumentCacheImpl {
-    constructor(e) {
-        this.serializer = e;
-    }
-    setIndexManager(e) {
-        this.indexManager = e;
-    }
-    /**
-     * Adds the supplied entries to the cache.
-     *
-     * All calls of `addEntry` are required to go through the RemoteDocumentChangeBuffer
-     * returned by `newChangeBuffer()` to ensure proper accounting of metadata.
-     */    addEntry(e, t, n) {
-        return __PRIVATE_remoteDocumentsStore(e).put(n);
-    }
-    /**
-     * Removes a document from the cache.
-     *
-     * All calls of `removeEntry`  are required to go through the RemoteDocumentChangeBuffer
-     * returned by `newChangeBuffer()` to ensure proper accounting of metadata.
-     */    removeEntry(e, t, n) {
-        return __PRIVATE_remoteDocumentsStore(e).delete(
-        /**
- * Returns a key that can be used for document lookups via the primary key of
- * the DbRemoteDocument object store.
- */
-        function __PRIVATE_dbReadTimeKey(e, t) {
-            const n = e.path.toArray();
-            return [ 
-            /* prefix path */ n.slice(0, n.length - 2), 
-            /* collection id */ n[n.length - 2], __PRIVATE_toDbTimestampKey(t), 
-            /* document id */ n[n.length - 1] ];
-        }
-        /**
- * Returns a key that can be used for document lookups on the
- * `DbRemoteDocumentDocumentCollectionGroupIndex` index.
- */ (t, n));
-    }
-    /**
-     * Updates the current cache size.
-     *
-     * Callers to `addEntry()` and `removeEntry()` *must* call this afterwards to update the
-     * cache's metadata.
-     */    updateMetadata(e, t) {
-        return this.getMetadata(e).next((n => (n.byteSize += t, this.qs(e, n))));
-    }
-    getEntry(e, t) {
-        let n = MutableDocument.newInvalidDocument(t);
-        return __PRIVATE_remoteDocumentsStore(e).ee({
-            index: re,
-            range: IDBKeyRange.only(__PRIVATE_dbKey(t))
-        }, ((e, r) => {
-            n = this.$s(t, r);
-        })).next((() => n));
-    }
-    /**
-     * Looks up an entry in the cache.
-     *
-     * @param documentKey - The key of the entry to look up.
-     * @returns The cached document entry and its size.
-     */    Ks(e, t) {
-        let n = {
-            size: 0,
-            document: MutableDocument.newInvalidDocument(t)
-        };
-        return __PRIVATE_remoteDocumentsStore(e).ee({
-            index: re,
-            range: IDBKeyRange.only(__PRIVATE_dbKey(t))
-        }, ((e, r) => {
-            n = {
-                document: this.$s(t, r),
-                size: __PRIVATE_dbDocumentSize(r)
-            };
-        })).next((() => n));
-    }
-    getEntries(e, t) {
-        let n = __PRIVATE_mutableDocumentMap();
-        return this.Ws(e, t, ((e, t) => {
-            const r = this.$s(e, t);
-            n = n.insert(e, r);
-        })).next((() => n));
-    }
-    getAllEntries(e) {
-        let t = __PRIVATE_mutableDocumentMap();
-        return __PRIVATE_remoteDocumentsStore(e).ee(((e, n) => {
-            const r = this.$s(DocumentKey.fromSegments(n.prefixPath.concat(n.collectionGroup, n.documentId)), n);
-            t = t.insert(r.key, r);
-        })).next((() => t));
-    }
-    /**
-     * Looks up several entries in the cache.
-     *
-     * @param documentKeys - The set of keys entries to look up.
-     * @returns A map of documents indexed by key and a map of sizes indexed by
-     *     key (zero if the document does not exist).
-     */    Qs(e, t) {
-        let n = __PRIVATE_mutableDocumentMap(), r = new SortedMap(DocumentKey.comparator);
-        return this.Ws(e, t, ((e, t) => {
-            const i = this.$s(e, t);
-            n = n.insert(e, i), r = r.insert(e, __PRIVATE_dbDocumentSize(t));
-        })).next((() => ({
-            documents: n,
-            Gs: r
-        })));
-    }
-    Ws(e, t, n) {
-        if (t.isEmpty()) return PersistencePromise.resolve();
-        let r = new SortedSet(__PRIVATE_dbKeyComparator);
-        t.forEach((e => r = r.add(e)));
-        const i = IDBKeyRange.bound(__PRIVATE_dbKey(r.first()), __PRIVATE_dbKey(r.last())), s = r.getIterator();
-        let _ = s.getNext();
-        return __PRIVATE_remoteDocumentsStore(e).ee({
-            index: re,
-            range: i
-        }, ((e, t, r) => {
-            const i = DocumentKey.fromSegments([ ...t.prefixPath, t.collectionGroup, t.documentId ]);
-            // Go through keys not found in cache.
-                        for (;_ && __PRIVATE_dbKeyComparator(_, i) < 0; ) n(_, null), _ = s.getNext();
-            _ && _.isEqual(i) && (
-            // Key found in cache.
-            n(_, t), _ = s.hasNext() ? s.getNext() : null), 
-            // Skip to the next key (if there is one).
-            _ ? r.j(__PRIVATE_dbKey(_)) : r.done();
-        })).next((() => {
-            // The rest of the keys are not in the cache. One case where `iterate`
-            // above won't go through them is when the cache is empty.
-            for (;_; ) n(_, null), _ = s.hasNext() ? s.getNext() : null;
-        }));
-    }
-    getDocumentsMatchingQuery(e, t, n, r, i) {
-        const s = __PRIVATE_isPipeline(t) ? ResourcePath.fromString(getPipelineCollection(t)) : t.path, _ = [ s.popLast().toArray(), s.lastSegment(), __PRIVATE_toDbTimestampKey(n.readTime), n.documentKey.path.isEmpty() ? "" : n.documentKey.path.lastSegment() ], o = [ s.popLast().toArray(), s.lastSegment(), [ Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER ], "" ];
-        return __PRIVATE_remoteDocumentsStore(e).H(IDBKeyRange.bound(_, o, true)).next((e => {
-            i?.incrementDocumentReadCount(e.length);
-            let n = __PRIVATE_mutableDocumentMap();
-            for (const i of e) {
-                const e = this.$s(DocumentKey.fromSegments(i.prefixPath.concat(i.collectionGroup, i.documentId)), i);
-                e.isFoundDocument() && (__PRIVATE_queryOrPipelineMatches(t, e) || r.has(e.key)) && (
-                // Either the document matches the given query, or it is mutated.
-                n = n.insert(e.key, e));
-            }
-            return n;
-        }));
-    }
-    getAllFromCollectionGroup(e, t, n, r) {
-        let i = __PRIVATE_mutableDocumentMap();
-        const s = __PRIVATE_dbCollectionGroupKey(t, n), _ = __PRIVATE_dbCollectionGroupKey(t, IndexOffset.max());
-        return __PRIVATE_remoteDocumentsStore(e).ee({
-            index: se,
-            range: IDBKeyRange.bound(s, _, true)
-        }, ((e, t, n) => {
-            const s = this.$s(DocumentKey.fromSegments(t.prefixPath.concat(t.collectionGroup, t.documentId)), t);
-            i = i.insert(s.key, s), i.size === r && n.done();
-        })).next((() => i));
-    }
-    newChangeBuffer(e) {
-        return new __PRIVATE_IndexedDbRemoteDocumentChangeBuffer(this, !!e && e.trackRemovals);
-    }
-    getSize(e) {
-        return this.getMetadata(e).next((e => e.byteSize));
-    }
-    getMetadata(e) {
-        return __PRIVATE_documentGlobalStore(e).get(ae).next((e => (__PRIVATE_hardAssert(!!e, 20021), 
-        e)));
-    }
-    qs(e, t) {
-        return __PRIVATE_documentGlobalStore(e).put(ae, t);
-    }
-    /**
-     * Decodes `dbRemoteDoc` and returns the document (or an invalid document if
-     * the document corresponds to the format used for sentinel deletes).
-     */    $s(e, t) {
-        if (t) {
-            const e = __PRIVATE_fromDbRemoteDocument(this.serializer, t);
-            // Whether the document is a sentinel removal and should only be used in the
-            // `getNewDocumentChanges()`
-                        if (!(e.isNoDocument() && e.version.isEqual(SnapshotVersion.min()))) return e;
-        }
-        return MutableDocument.newInvalidDocument(e);
-    }
-}
-
-/** Creates a new IndexedDbRemoteDocumentCache. */ function __PRIVATE_newIndexedDbRemoteDocumentCache(e) {
-    return new __PRIVATE_IndexedDbRemoteDocumentCacheImpl(e);
-}
-
-/**
- * Handles the details of adding and updating documents in the IndexedDbRemoteDocumentCache.
- *
- * Unlike the MemoryRemoteDocumentChangeBuffer, the IndexedDb implementation computes the size
- * delta for all submitted changes. This avoids having to re-read all documents from IndexedDb
- * when we apply the changes.
- */ class __PRIVATE_IndexedDbRemoteDocumentChangeBuffer extends RemoteDocumentChangeBuffer {
-    /**
-     * @param documentCache - The IndexedDbRemoteDocumentCache to apply the changes to.
-     * @param trackRemovals - Whether to create sentinel deletes that can be tracked by
-     * `getNewDocumentChanges()`.
-     */
-    constructor(e, t) {
-        super(), this.zs = e, this.trackRemovals = t, 
-        // A map of document sizes and read times prior to applying the changes in
-        // this buffer.
-        this.js = new ObjectMap((e => e.toString()), ((e, t) => e.isEqual(t)));
-    }
-    applyChanges(e) {
-        const t = [];
-        let n = 0, r = new SortedSet(((e, t) => __PRIVATE_primitiveComparator(e.canonicalString(), t.canonicalString())));
-        return this.changes.forEach(((i, s) => {
-            const _ = this.js.get(i);
-            if (t.push(this.zs.removeEntry(e, i, _.readTime)), s.isValidDocument()) {
-                const o = __PRIVATE_toDbRemoteDocument(this.zs.serializer, s);
-                r = r.add(i.path.popLast());
-                const a = __PRIVATE_dbDocumentSize(o);
-                n += a - _.size, t.push(this.zs.addEntry(e, i, o));
-            } else if (n -= _.size, this.trackRemovals) {
-                // In order to track removals, we store a "sentinel delete" in the
-                // RemoteDocumentCache. This entry is represented by a NoDocument
-                // with a version of 0 and ignored by `maybeDecodeDocument()` but
-                // preserved in `getNewDocumentChanges()`.
-                const n = __PRIVATE_toDbRemoteDocument(this.zs.serializer, s.convertToNoDocument(SnapshotVersion.min()));
-                t.push(this.zs.addEntry(e, i, n));
-            }
-        })), r.forEach((n => {
-            t.push(this.zs.indexManager.addToCollectionParentIndex(e, n));
-        })), t.push(this.zs.updateMetadata(e, n)), PersistencePromise.waitFor(t);
-    }
-    getFromCache(e, t) {
-        // Record the size of everything we load from the cache so we can compute a delta later.
-        return this.zs.Ks(e, t).next((e => (this.js.set(t, {
-            size: e.size,
-            readTime: e.document.readTime
-        }), e.document)));
-    }
-    getAllFromCache(e, t) {
-        // Record the size of everything we load from the cache so we can compute
-        // a delta later.
-        return this.zs.Qs(e, t).next((({documents: e, Gs: t}) => (
-        // Note: `getAllFromCache` returns two maps instead of a single map from
-        // keys to `DocumentSizeEntry`s. This is to allow returning the
-        // `MutableDocumentMap` directly, without a conversion.
-        t.forEach(((t, n) => {
-            this.js.set(t, {
-                size: n,
-                readTime: e.get(t).readTime
-            });
-        })), e)));
-    }
-}
-
-function __PRIVATE_documentGlobalStore(e) {
-    return __PRIVATE_getStore(e, oe);
-}
-
-/**
- * Helper to get a typed SimpleDbStore for the remoteDocuments object store.
- */ function __PRIVATE_remoteDocumentsStore(e) {
-    return __PRIVATE_getStore(e, te);
-}
-
-/**
- * Returns a key that can be used for document lookups on the
- * `DbRemoteDocumentDocumentKeyIndex` index.
- */ function __PRIVATE_dbKey(e) {
-    const t = e.path.toArray();
-    return [ 
-    /* prefix path */ t.slice(0, t.length - 2), 
-    /* collection id */ t[t.length - 2], 
-    /* document id */ t[t.length - 1] ];
-}
-
-function __PRIVATE_dbCollectionGroupKey(e, t) {
-    const n = t.documentKey.path.toArray();
-    return [ 
-    /* collection id */ e, __PRIVATE_toDbTimestampKey(t.readTime), 
-    /* prefix path */ n.slice(0, n.length - 2), 
-    /* document id */ n.length > 0 ? n[n.length - 1] : "" ];
-}
-
-/**
- * Comparator that compares document keys according to the primary key sorting
- * used by the `DbRemoteDocumentDocument` store (by prefix path, collection id
- * and then document ID).
- *
- * Visible for testing.
- */ function __PRIVATE_dbKeyComparator(e, t) {
-    const n = e.path.toArray(), r = t.path.toArray();
-    // The ordering is based on https://chromium.googlesource.com/chromium/blink/+/fe5c21fef94dae71c1c3344775b8d8a7f7e6d9ec/Source/modules/indexeddb/IDBKey.cpp#74
-    let i = 0;
-    for (let e = 0; e < n.length - 2 && e < r.length - 2; ++e) if (i = __PRIVATE_primitiveComparator(n[e], r[e]), 
-    i) return i;
-    return i = __PRIVATE_primitiveComparator(n.length, r.length), i || (i = __PRIVATE_primitiveComparator(n[n.length - 2], r[r.length - 2]), 
-    i || __PRIVATE_primitiveComparator(n[n.length - 1], r[r.length - 1]));
 }
 
 /**
@@ -33864,777 +29888,6 @@ class __PRIVATE_MemoryLruDelegate {
 
 /**
  * @license
- * Copyright 2020 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-/** Performs database creation and schema upgrades. */ class __PRIVATE_SchemaConverter {
-    constructor(e) {
-        this.serializer = e;
-    }
-    /**
-     * Performs database creation and schema upgrades.
-     *
-     * Note that in production, this method is only ever used to upgrade the schema
-     * to SCHEMA_VERSION. Different values of toVersion are only used for testing
-     * and local feature development.
-     */    U(e, t, n, r) {
-        const i = new __PRIVATE_SimpleDbTransaction("createOrUpgrade", t);
-        n < 1 && r >= 1 && (!function __PRIVATE_createPrimaryClientStore(e) {
-            e.createObjectStore(Q);
-        }(e), function __PRIVATE_createMutationQueue(e) {
-            e.createObjectStore(z, {
-                keyPath: j
-            });
-            const t = e.createObjectStore(H, {
-                keyPath: J,
-                autoIncrement: true
-            });
-            t.createIndex(Y, Z, {
-                unique: true
-            }), e.createObjectStore(ee);
-        }
-        /**
- * Upgrade function to migrate the 'mutations' store from V1 to V3. Loads
- * and rewrites all data.
- */ (e), __PRIVATE_createQueryCache(e), function __PRIVATE_createLegacyRemoteDocumentCache(e) {
-            e.createObjectStore(W);
-        }(e));
-        // Migration 2 to populate the targetGlobal object no longer needed since
-        // migration 3 unconditionally clears it.
-                let s = PersistencePromise.resolve();
-        return n < 3 && r >= 3 && (
-        // Brand new clients don't need to drop and recreate--only clients that
-        // potentially have corrupt data.
-        0 !== n && (!function __PRIVATE_dropQueryCache(e) {
-            e.deleteObjectStore(Ee), e.deleteObjectStore(ue), e.deleteObjectStore(Ie);
-        }(e), __PRIVATE_createQueryCache(e)), s = s.next((() => 
-        /**
- * Creates the target global singleton row.
- *
- * @param txn - The version upgrade transaction for indexeddb
- */
-        function __PRIVATE_writeEmptyTargetGlobalEntry(e) {
-            const t = e.store(Ie), n = {
-                highestTargetId: 0,
-                highestListenSequenceNumber: 0,
-                lastRemoteSnapshotVersion: SnapshotVersion.min().toTimestamp(),
-                targetCount: 0
-            };
-            return t.put(Re, n);
-        }(i)))), n < 4 && r >= 4 && (0 !== n && (
-        // Schema version 3 uses auto-generated keys to generate globally unique
-        // mutation batch IDs (this was previously ensured internally by the
-        // client). To migrate to the new schema, we have to read all mutations
-        // and write them back out. We preserve the existing batch IDs to guarantee
-        // consistency with other object stores. Any further mutation batch IDs will
-        // be auto-generated.
-        s = s.next((() => function __PRIVATE_upgradeMutationBatchSchemaAndMigrateData(e, t) {
-            const n = t.store(H);
-            return n.H().next((n => {
-                e.deleteObjectStore(H);
-                e.createObjectStore(H, {
-                    keyPath: J,
-                    autoIncrement: true
-                }).createIndex(Y, Z, {
-                    unique: true
-                });
-                const r = t.store(H), i = n.map((e => r.put(e)));
-                return PersistencePromise.waitFor(i);
-            }));
-        }(e, i)))), s = s.next((() => {
-            !function __PRIVATE_createClientMetadataStore(e) {
-                e.createObjectStore(de, {
-                    keyPath: fe
-                });
-            }(e);
-        }))), n < 5 && r >= 5 && (s = s.next((() => this.N_(i)))), n < 6 && r >= 6 && (s = s.next((() => (function __PRIVATE_createDocumentGlobalStore(e) {
-            e.createObjectStore(oe);
-        }(e), this.L_(i))))), n < 7 && r >= 7 && (s = s.next((() => this.B_(i)))), n < 8 && r >= 8 && (s = s.next((() => this.U_(e, i)))), 
-        n < 9 && r >= 9 && (s = s.next((() => {
-            // Multi-Tab used to manage its own changelog, but this has been moved
-            // to the DbRemoteDocument object store itself. Since the previous change
-            // log only contained transient data, we can drop its object store.
-            !function __PRIVATE_dropRemoteDocumentChangesStore(e) {
-                e.objectStoreNames.contains("remoteDocumentChanges") && e.deleteObjectStore("remoteDocumentChanges");
-            }(e);
-            // Note: Schema version 9 used to create a read time index for the
-            // RemoteDocumentCache. This is now done with schema version 13.
-                }))), n < 10 && r >= 10 && (s = s.next((() => this.k_(i)))), n < 11 && r >= 11 && (s = s.next((() => {
-            !function __PRIVATE_createBundlesStore(e) {
-                e.createObjectStore(me, {
-                    keyPath: pe
-                });
-            }(e), function __PRIVATE_createNamedQueriesStore(e) {
-                e.createObjectStore(ge, {
-                    keyPath: ye
-                });
-            }(e);
-        }))), n < 12 && r >= 12 && (s = s.next((() => {
-            !function __PRIVATE_createDocumentOverlayStore(e) {
-                const t = e.createObjectStore(Be, {
-                    keyPath: Ue
-                });
-                t.createIndex(ke, qe, {
-                    unique: false
-                }), t.createIndex($e, Ke, {
-                    unique: false
-                });
-            }(e);
-        }))), n < 13 && r >= 13 && (s = s.next((() => function __PRIVATE_createRemoteDocumentCache(e) {
-            const t = e.createObjectStore(te, {
-                keyPath: ne
-            });
-            t.createIndex(re, ie), t.createIndex(se, _e);
-        }(e))).next((() => this.q_(e, i))).next((() => e.deleteObjectStore(W)))), n < 14 && r >= 14 && (s = s.next((() => this.K_(e, i)))), 
-        n < 15 && r >= 15 && (s = s.next((() => function __PRIVATE_createFieldIndex(e) {
-            const t = e.createObjectStore(we, {
-                keyPath: be,
-                autoIncrement: true
-            });
-            t.createIndex(ve, Se, {
-                unique: false
-            });
-            const n = e.createObjectStore(De, {
-                keyPath: xe
-            });
-            n.createIndex(Ce, Fe, {
-                unique: false
-            });
-            const r = e.createObjectStore(Oe, {
-                keyPath: Me
-            });
-            r.createIndex(Ne, Le, {
-                unique: false
-            });
-        }(e)))), n < 16 && r >= 16 && (
-        // Clear the object stores to remove possibly corrupted index entries
-        s = s.next((() => {
-            t.objectStore(De).clear();
-        })).next((() => {
-            t.objectStore(Oe).clear();
-        }))), n < 17 && r >= 17 && (s = s.next((() => {
-            !function __PRIVATE_createGlobalsStore(e) {
-                e.createObjectStore(We, {
-                    keyPath: Qe
-                });
-            }(e);
-        }))), n < 18 && r >= 18 && isSafariOrWebkit() && (s = s.next((() => {
-            t.objectStore(De).clear();
-        })).next((() => {
-            t.objectStore(Oe).clear();
-        }))), s;
-    }
-    L_(e) {
-        let t = 0;
-        return e.store(W).ee(((e, n) => {
-            t += __PRIVATE_dbDocumentSize(n);
-        })).next((() => {
-            const n = {
-                byteSize: t
-            };
-            return e.store(oe).put(ae, n);
-        }));
-    }
-    N_(e) {
-        const t = e.store(z), n = e.store(H);
-        return t.H().next((t => PersistencePromise.forEach(t, (t => {
-            const r = IDBKeyRange.bound([ t.userId, $ ], [ t.userId, t.lastAcknowledgedBatchId ]);
-            return n.H(Y, r).next((n => PersistencePromise.forEach(n, (n => {
-                __PRIVATE_hardAssert(n.userId === t.userId, 18650, "Cannot process batch from unexpected user", {
-                    batchId: n.batchId
-                });
-                const r = __PRIVATE_fromDbMutationBatch(this.serializer, n);
-                return removeMutationBatch(e, t.userId, r).next((() => {}));
-            }))));
-        }))));
-    }
-    /**
-     * Ensures that every document in the remote document cache has a corresponding sentinel row
-     * with a sequence number. Missing rows are given the most recently used sequence number.
-     */    B_(e) {
-        const t = e.store(Ee), n = e.store(W);
-        return e.store(Ie).get(Re).next((e => {
-            const r = [];
-            return n.ee(((n, i) => {
-                const s = new ResourcePath(n), _ = function __PRIVATE_sentinelKey(e) {
-                    return [ 0, __PRIVATE_encodeResourcePath(e) ];
-                }(s);
-                r.push(t.get(_).next((n => n ? PersistencePromise.resolve() : (n => t.put({
-                    targetId: 0,
-                    path: __PRIVATE_encodeResourcePath(n),
-                    sequenceNumber: e.highestListenSequenceNumber
-                }))(s))));
-            })).next((() => PersistencePromise.waitFor(r)));
-        }));
-    }
-    U_(e, t) {
-        // Create the index.
-        e.createObjectStore(Ae, {
-            keyPath: Ve
-        });
-        const n = t.store(Ae), r = new __PRIVATE_MemoryCollectionParentIndex, addEntry = e => {
-            if (r.add(e)) {
-                const t = e.lastSegment(), r = e.popLast();
-                return n.put({
-                    collectionId: t,
-                    parent: __PRIVATE_encodeResourcePath(r)
-                });
-            }
-        };
-        // Helper to add an index entry iff we haven't already written it.
-                // Index existing remote documents.
-        return t.store(W).ee({
-            X: true
-        }, ((e, t) => {
-            const n = new ResourcePath(e);
-            return addEntry(n.popLast());
-        })).next((() => t.store(ee).ee({
-            X: true
-        }, (([e, t, n], r) => {
-            const i = __PRIVATE_decodeResourcePath(t);
-            return addEntry(i.popLast());
-        }))));
-    }
-    k_(e) {
-        const t = e.store(ue);
-        return t.ee(((e, n) => {
-            const r = __PRIVATE_fromDbTarget(this.serializer, n), i = __PRIVATE_toDbTarget(this.serializer, r);
-            return t.put(i);
-        }));
-    }
-    q_(e, t) {
-        const n = t.store(W), r = [];
-        return n.ee(((e, n) => {
-            const i = t.store(te), s = function __PRIVATE_extractKey(e) {
-                return e.document ? new DocumentKey(ResourcePath.fromString(e.document.name).popFirst(5)) : e.noDocument ? DocumentKey.fromSegments(e.noDocument.path) : e.unknownDocument ? DocumentKey.fromSegments(e.unknownDocument.path) : fail(36783);
-            }
-            /**
- * @license
- * Copyright 2017 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */ (n).path.toArray(), _ = {
-                prefixPath: s.slice(0, s.length - 2),
-                collectionGroup: s[s.length - 2],
-                documentId: s[s.length - 1],
-                readTime: n.readTime || [ 0, 0 ],
-                unknownDocument: n.unknownDocument,
-                noDocument: n.noDocument,
-                document: n.document,
-                hasCommittedMutations: !!n.hasCommittedMutations
-            };
-            r.push(i.put(_));
-        })).next((() => PersistencePromise.waitFor(r)));
-    }
-    K_(e, t) {
-        const n = t.store(H), r = __PRIVATE_newIndexedDbRemoteDocumentCache(this.serializer), i = new __PRIVATE_MemoryPersistence(__PRIVATE_MemoryEagerDelegate.C_, this.serializer.zr);
-        return n.H().next((e => {
-            const n = new Map;
-            return e.forEach((e => {
-                let t = n.get(e.userId) ?? __PRIVATE_documentKeySet();
-                __PRIVATE_fromDbMutationBatch(this.serializer, e).keys().forEach((e => t = t.add(e))), 
-                n.set(e.userId, t);
-            })), PersistencePromise.forEach(n, ((e, n) => {
-                const s = new User(n), _ = __PRIVATE_IndexedDbDocumentOverlayCache.jr(this.serializer, s), o = i.getIndexManager(s), a = __PRIVATE_IndexedDbMutationQueue.jr(s, this.serializer, o, i.referenceDelegate);
-                return new LocalDocumentsView(r, a, _, o).recalculateAndSaveOverlaysForDocumentKeys(new __PRIVATE_IndexedDbTransaction(t, __PRIVATE_ListenSequence.ce), e).next();
-            }));
-        }));
-    }
-}
-
-function __PRIVATE_createQueryCache(e) {
-    e.createObjectStore(Ee, {
-        keyPath: he
-    }).createIndex(Te, Pe, {
-        unique: true
-    });
-    // NOTE: This is unique only because the TargetId is the suffix.
-    e.createObjectStore(ue, {
-        keyPath: "targetId"
-    }).createIndex(ce, le, {
-        unique: true
-    }), e.createObjectStore(Ie);
-}
-
-const rn = "IndexedDbPersistence", sn = 18e5, _n = 5e3, on = "Failed to obtain exclusive access to the persistence layer. To allow shared access, multi-tab synchronization has to be enabled in all tabs. If you are using `experimentalForceOwningTab:true`, make sure that only one tab has persistence enabled at any given time.", an = "main";
-
-/**
- * Oldest acceptable age in milliseconds for client metadata before the client
- * is considered inactive and its associated data is garbage collected.
- */
-/**
- * An IndexedDB-backed instance of Persistence. Data is stored persistently
- * across sessions.
- *
- * On Web only, the Firestore SDKs support shared access to its persistence
- * layer. This allows multiple browser tabs to read and write to IndexedDb and
- * to synchronize state even without network connectivity. Shared access is
- * currently optional and not enabled unless all clients invoke
- * `enablePersistence()` with `{synchronizeTabs:true}`.
- *
- * In multi-tab mode, if multiple clients are active at the same time, the SDK
- * will designate one client as the "primary client". An effort is made to pick
- * a visible, network-connected and active client, and this client is
- * responsible for letting other clients know about its presence. The primary
- * client writes a unique client-generated identifier (the client ID) to
- * IndexedDb’s "owner" store every 4 seconds. If the primary client fails to
- * update this entry, another client can acquire the lease and take over as
- * primary.
- *
- * Some persistence operations in the SDK are designated as primary-client only
- * operations. This includes the acknowledgment of mutations and all updates of
- * remote documents. The effects of these operations are written to persistence
- * and then broadcast to other tabs via LocalStorage (see
- * `WebStorageSharedClientState`), which then refresh their state from
- * persistence.
- *
- * Similarly, the primary client listens to notifications sent by secondary
- * clients to discover persistence changes written by secondary clients, such as
- * the addition of new mutations and query targets.
- *
- * If multi-tab is not enabled and another tab already obtained the primary
- * lease, IndexedDbPersistence enters a failed state and all subsequent
- * operations will automatically fail.
- *
- * Additionally, there is an optimization so that when a tab is closed, the
- * primary lease is released immediately (this is especially important to make
- * sure that a refreshed tab is able to immediately re-acquire the primary
- * lease). Unfortunately, IndexedDB cannot be reliably used in window.unload
- * since it is an asynchronous API. So in addition to attempting to give up the
- * lease, the leaseholder writes its client ID to a "zombiedClient" entry in
- * LocalStorage which acts as an indicator that another tab should go ahead and
- * take the primary lease immediately regardless of the current lease timestamp.
- *
- * TODO(b/114226234): Remove `synchronizeTabs` section when multi-tab is no
- * longer optional.
- */
-class __PRIVATE_IndexedDbPersistence {
-    constructor(
-    /**
-     * Whether to synchronize the in-memory state of multiple tabs and share
-     * access to local persistence.
-     */
-    e, t, n, r, i, s, _, o, a, 
-    /**
-     * If set to true, forcefully obtains database access. Existing tabs will
-     * no longer be able to access IndexedDB.
-     */
-    u, c = 18) {
-        if (this.allowTabSynchronization = e, this.persistenceKey = t, this.clientId = n, 
-        this.Tn = i, this.window = s, this.document = _, this.W_ = a, this.Q_ = u, this.G_ = c, 
-        this.f_ = null, this.m_ = false, this.isPrimary = false, this.networkEnabled = true, 
-        /** Our window.unload handler, if registered. */
-        this.z_ = null, this.inForeground = false, 
-        /** Our 'visibilitychange' listener if registered. */
-        this.j_ = null, 
-        /** The client metadata refresh task. */
-        this.H_ = null, 
-        /** The last time we garbage collected the client metadata object store. */
-        this.J_ = Number.NEGATIVE_INFINITY, 
-        /** A listener to notify on primary state changes. */
-        this.Y_ = e => Promise.resolve(), !__PRIVATE_IndexedDbPersistence.C()) throw new FirestoreError(D.UNIMPLEMENTED, "This platform is either missing IndexedDB or is known to have an incomplete implementation. Offline persistence has been disabled.");
-        this.referenceDelegate = new __PRIVATE_IndexedDbLruDelegateImpl(this, r), this.Z_ = t + an, 
-        this.serializer = new __PRIVATE_LocalSerializer(o), this.X_ = new __PRIVATE_SimpleDb(this.Z_, this.G_, new __PRIVATE_SchemaConverter(this.serializer)), 
-        this.p_ = new __PRIVATE_IndexedDbGlobalsCache, this.g_ = new __PRIVATE_IndexedDbTargetCache(this.referenceDelegate, this.serializer), 
-        this.remoteDocumentCache = __PRIVATE_newIndexedDbRemoteDocumentCache(this.serializer), 
-        this.w_ = new __PRIVATE_IndexedDbBundleCache, this.window && this.window.localStorage ? this.eo = this.window.localStorage : (this.eo = null, 
-        false === u && __PRIVATE_logError(rn, "LocalStorage is unavailable. As a result, persistence may not work reliably. In particular enablePersistence() could fail immediately after refreshing the page."));
-    }
-    /**
-     * Attempt to start IndexedDb persistence.
-     *
-     * @returns Whether persistence was enabled.
-     */    start() {
-        // NOTE: This is expected to fail sometimes (in the case of another tab
-        // already having the persistence lock), so it's the first thing we should
-        // do.
-        return this.no().then((() => {
-            if (!this.isPrimary && !this.allowTabSynchronization) 
-            // Fail `start()` if `synchronizeTabs` is disabled and we cannot
-            // obtain the primary lease.
-            throw new FirestoreError(D.FAILED_PRECONDITION, on);
-            return this.ro(), this.io(), this.so(), this.runTransaction("getHighestListenSequenceNumber", "readonly", (e => this.g_.getHighestSequenceNumber(e)));
-        })).then((e => {
-            this.f_ = new __PRIVATE_ListenSequence(e, this.W_);
-        })).then((() => {
-            this.m_ = true;
-        })).catch((e => (this.X_ && this.X_.close(), Promise.reject(e))));
-    }
-    /**
-     * Registers a listener that gets called when the primary state of the
-     * instance changes. Upon registering, this listener is invoked immediately
-     * with the current primary state.
-     *
-     * PORTING NOTE: This is only used for Web multi-tab.
-     */    _o(e) {
-        return this.Y_ = async t => {
-            if (this.started) return e(t);
-        }, e(this.isPrimary);
-    }
-    /**
-     * Registers a listener that gets called when the database receives a
-     * version change event indicating that it has deleted.
-     *
-     * PORTING NOTE: This is only used for Web multi-tab.
-     */    setDatabaseDeletedListener(e) {
-        this.X_.q((async t => {
-            // Check if an attempt is made to delete IndexedDB.
-            null === t.newVersion && await e();
-        }));
-    }
-    /**
-     * Adjusts the current network state in the client's metadata, potentially
-     * affecting the primary lease.
-     *
-     * PORTING NOTE: This is only used for Web multi-tab.
-     */    setNetworkEnabled(e) {
-        this.networkEnabled !== e && (this.networkEnabled = e, 
-        // Schedule a primary lease refresh for immediate execution. The eventual
-        // lease update will be propagated via `primaryStateListener`.
-        this.Tn.enqueueAndForget((async () => {
-            this.started && await this.no();
-        })));
-    }
-    /**
-     * Updates the client metadata in IndexedDb and attempts to either obtain or
-     * extend the primary lease for the local client. Asynchronously notifies the
-     * primary state listener if the client either newly obtained or released its
-     * primary lease.
-     */    no() {
-        return this.runTransaction("updateClientMetadataAndTryBecomePrimary", "readwrite", (e => __PRIVATE_clientMetadataStore(e).put({
-            clientId: this.clientId,
-            updateTimeMs: Date.now(),
-            networkEnabled: this.networkEnabled,
-            inForeground: this.inForeground
-        }).next((() => {
-            if (this.isPrimary) return this.oo(e).next((e => {
-                e || (this.isPrimary = false, this.Tn.enqueueRetryable((() => this.Y_(false))));
-            }));
-        })).next((() => this.ao(e))).next((t => this.isPrimary && !t ? this.uo(e).next((() => false)) : !!t && this.co(e).next((() => true)))))).catch((e => {
-            if (__PRIVATE_isIndexedDbTransactionError(e)) 
-            // Proceed with the existing state. Any subsequent access to
-            // IndexedDB will verify the lease.
-            return __PRIVATE_logDebug(rn, "Failed to extend owner lease: ", e), this.isPrimary;
-            if (!this.allowTabSynchronization) throw e;
-            return __PRIVATE_logDebug(rn, "Releasing owner lease after error during lease refresh", e), 
-            /* isPrimary= */ false;
-        })).then((e => {
-            this.isPrimary !== e && this.Tn.enqueueRetryable((() => this.Y_(e))), this.isPrimary = e;
-        }));
-    }
-    oo(e) {
-        return __PRIVATE_primaryClientStore(e).get(G).next((e => PersistencePromise.resolve(this.lo(e))));
-    }
-    Eo(e) {
-        return __PRIVATE_clientMetadataStore(e).delete(this.clientId);
-    }
-    /**
-     * If the garbage collection threshold has passed, prunes the
-     * RemoteDocumentChanges and the ClientMetadata store based on the last update
-     * time of all clients.
-     */    async ho() {
-        if (this.isPrimary && !this.To(this.J_, sn)) {
-            this.J_ = Date.now();
-            const e = await this.runTransaction("maybeGarbageCollectMultiClientState", "readwrite-primary", (e => {
-                const t = __PRIVATE_getStore(e, de);
-                return t.H().next((e => {
-                    const n = this.Po(e, sn), r = e.filter((e => -1 === n.indexOf(e)));
-                    // Delete metadata for clients that are no longer considered active.
-                    return PersistencePromise.forEach(r, (e => t.delete(e.clientId))).next((() => r));
-                }));
-            })).catch((() => []));
-            // Delete potential leftover entries that may continue to mark the
-            // inactive clients as zombied in LocalStorage.
-            // Ideally we'd delete the IndexedDb and LocalStorage zombie entries for
-            // the client atomically, but we can't. So we opt to delete the IndexedDb
-            // entries first to avoid potentially reviving a zombied client.
-                        if (this.eo) for (const t of e) this.eo.removeItem(this.Ro(t.clientId));
-        }
-    }
-    /**
-     * Schedules a recurring timer to update the client metadata and to either
-     * extend or acquire the primary lease if the client is eligible.
-     */    so() {
-        this.H_ = this.Tn.enqueueAfterDelay("client_metadata_refresh" /* TimerId.ClientMetadataRefresh */ , 4e3, (() => this.no().then((() => this.ho())).then((() => this.so()))));
-    }
-    /** Checks whether `client` is the local client. */    lo(e) {
-        return !!e && e.ownerId === this.clientId;
-    }
-    /**
-     * Evaluate the state of all active clients and determine whether the local
-     * client is or can act as the holder of the primary lease. Returns whether
-     * the client is eligible for the lease, but does not actually acquire it.
-     * May return 'false' even if there is no active leaseholder and another
-     * (foreground) client should become leaseholder instead.
-     */    ao(e) {
-        if (this.Q_) return PersistencePromise.resolve(true);
-        return __PRIVATE_primaryClientStore(e).get(G).next((t => {
-            // A client is eligible for the primary lease if:
-            // - its network is enabled and the client's tab is in the foreground.
-            // - its network is enabled and no other client's tab is in the
-            //   foreground.
-            // - every clients network is disabled and the client's tab is in the
-            //   foreground.
-            // - every clients network is disabled and no other client's tab is in
-            //   the foreground.
-            // - the `forceOwningTab` setting was passed in.
-            if (null !== t && this.To(t.leaseTimestampMs, _n) && !this.Io(t.ownerId)) {
-                if (this.lo(t) && this.networkEnabled) return true;
-                if (!this.lo(t)) {
-                    if (!t.allowTabSynchronization) 
-                    // Fail the `canActAsPrimary` check if the current leaseholder has
-                    // not opted into multi-tab synchronization. If this happens at
-                    // client startup, we reject the Promise returned by
-                    // `enablePersistence()` and the user can continue to use Firestore
-                    // with in-memory persistence.
-                    // If this fails during a lease refresh, we will instead block the
-                    // AsyncQueue from executing further operations. Note that this is
-                    // acceptable since mixing & matching different `synchronizeTabs`
-                    // settings is not supported.
-                    // TODO(b/114226234): Remove this check when `synchronizeTabs` can
-                    // no longer be turned off.
-                    throw new FirestoreError(D.FAILED_PRECONDITION, on);
-                    return false;
-                }
-            }
-            return !(!this.networkEnabled || !this.inForeground) || __PRIVATE_clientMetadataStore(e).H().next((e => void 0 === this.Po(e, _n).find((e => {
-                if (this.clientId !== e.clientId) {
-                    const t = !this.networkEnabled && e.networkEnabled, n = !this.inForeground && e.inForeground, r = this.networkEnabled === e.networkEnabled;
-                    if (t || n && r) return true;
-                }
-                return false;
-            }))));
-        })).next((e => (this.isPrimary !== e && __PRIVATE_logDebug(rn, `Client ${e ? "is" : "is not"} eligible for a primary lease.`), 
-        e)));
-    }
-    async shutdown() {
-        // The shutdown() operations are idempotent and can be called even when
-        // start() aborted (e.g. because it couldn't acquire the persistence lease).
-        this.m_ = false, this.Ao(), this.H_ && (this.H_.cancel(), this.H_ = null), this.Vo(), 
-        this.fo(), 
-        // Use `SimpleDb.runTransaction` directly to avoid failing if another tab
-        // has obtained the primary lease.
-        await this.X_.runTransaction("shutdown", "readwrite", [ Q, de ], (e => {
-            const t = new __PRIVATE_IndexedDbTransaction(e, __PRIVATE_ListenSequence.ce);
-            return this.uo(t).next((() => this.Eo(t)));
-        })), this.X_.close(), 
-        // Remove the entry marking the client as zombied from LocalStorage since
-        // we successfully deleted its metadata from IndexedDb.
-        this.mo();
-    }
-    /**
-     * Returns clients that are not zombied and have an updateTime within the
-     * provided threshold.
-     */    Po(e, t) {
-        return e.filter((e => this.To(e.updateTimeMs, t) && !this.Io(e.clientId)));
-    }
-    /**
-     * Returns the IDs of the clients that are currently active. If multi-tab
-     * is not supported, returns an array that only contains the local client's
-     * ID.
-     *
-     * PORTING NOTE: This is only used for Web multi-tab.
-     */    po() {
-        return this.runTransaction("getActiveClients", "readonly", (e => __PRIVATE_clientMetadataStore(e).H().next((e => this.Po(e, sn).map((e => e.clientId))))));
-    }
-    get started() {
-        return this.m_;
-    }
-    getGlobalsCache() {
-        return this.p_;
-    }
-    getMutationQueue(e, t) {
-        return __PRIVATE_IndexedDbMutationQueue.jr(e, this.serializer, t, this.referenceDelegate);
-    }
-    getTargetCache() {
-        return this.g_;
-    }
-    getRemoteDocumentCache() {
-        return this.remoteDocumentCache;
-    }
-    getIndexManager(e) {
-        return new __PRIVATE_IndexedDbIndexManager(e, this.serializer.zr.databaseId);
-    }
-    getDocumentOverlayCache(e) {
-        return __PRIVATE_IndexedDbDocumentOverlayCache.jr(this.serializer, e);
-    }
-    getBundleCache() {
-        return this.w_;
-    }
-    runTransaction(e, t, n) {
-        __PRIVATE_logDebug(rn, "Starting transaction:", e);
-        const r = "readonly" === t ? "readonly" : "readwrite", i = 
-        /** Returns the object stores for the provided schema. */
-        function __PRIVATE_getObjectStores(e) {
-            return 18 === e ? Xe : 17 === e ? Ze : 16 === e ? Ye : 15 === e ? Je : 14 === e ? He : 13 === e ? je : 12 === e ? ze : 11 === e ? Ge : void fail(60245);
-        }(this.G_);
-        let s;
-        // Do all transactions as readwrite against all object stores, since we
-        // are the only reader/writer.
-                return this.X_.runTransaction(e, r, i, (r => (s = new __PRIVATE_IndexedDbTransaction(r, this.f_ ? this.f_.next() : __PRIVATE_ListenSequence.ce), 
-        "readwrite-primary" === t ? this.oo(s).next((e => !!e || this.ao(s))).next((t => {
-            if (!t) throw __PRIVATE_logError(`Failed to obtain primary lease for action '${e}'.`), 
-            this.isPrimary = false, this.Tn.enqueueRetryable((() => this.Y_(false))), new FirestoreError(D.FAILED_PRECONDITION, B);
-            return n(s);
-        })).next((e => this.co(s).next((() => e)))) : this.yo(s).next((() => n(s)))))).then((e => (s.raiseOnCommittedEvent(), 
-        e)));
-    }
-    /**
-     * Verifies that the current tab is the primary leaseholder or alternatively
-     * that the leaseholder has opted into multi-tab synchronization.
-     */
-    // TODO(b/114226234): Remove this check when `synchronizeTabs` can no longer
-    // be turned off.
-    yo(e) {
-        return __PRIVATE_primaryClientStore(e).get(G).next((e => {
-            if (null !== e && this.To(e.leaseTimestampMs, _n) && !this.Io(e.ownerId) && !this.lo(e) && !(this.Q_ || this.allowTabSynchronization && e.allowTabSynchronization)) throw new FirestoreError(D.FAILED_PRECONDITION, on);
-        }));
-    }
-    /**
-     * Obtains or extends the new primary lease for the local client. This
-     * method does not verify that the client is eligible for this lease.
-     */    co(e) {
-        const t = {
-            ownerId: this.clientId,
-            allowTabSynchronization: this.allowTabSynchronization,
-            leaseTimestampMs: Date.now()
-        };
-        return __PRIVATE_primaryClientStore(e).put(G, t);
-    }
-    static C() {
-        return __PRIVATE_SimpleDb.C();
-    }
-    /** Checks the primary lease and removes it if we are the current primary. */    uo(e) {
-        const t = __PRIVATE_primaryClientStore(e);
-        return t.get(G).next((e => this.lo(e) ? (__PRIVATE_logDebug(rn, "Releasing primary lease."), 
-        t.delete(G)) : PersistencePromise.resolve()));
-    }
-    /** Verifies that `updateTimeMs` is within `maxAgeMs`. */    To(e, t) {
-        const n = Date.now();
-        return !(e < n - t) && (!(e > n) || (__PRIVATE_logError(`Detected an update time that is in the future: ${e} > ${n}`), 
-        false));
-    }
-    ro() {
-        null !== this.document && "function" == typeof this.document.addEventListener && (this.j_ = () => {
-            this.Tn.enqueueAndForget((() => (this.inForeground = "visible" === this.document.visibilityState, 
-            this.no())));
-        }, this.document.addEventListener("visibilitychange", this.j_), this.inForeground = "visible" === this.document.visibilityState);
-    }
-    Vo() {
-        this.j_ && (this.document.removeEventListener("visibilitychange", this.j_), this.j_ = null);
-    }
-    /**
-     * Attaches a window.unload handler that will synchronously write our
-     * clientId to a "zombie client id" location in LocalStorage. This can be used
-     * by tabs trying to acquire the primary lease to determine that the lease
-     * is no longer valid even if the timestamp is recent. This is particularly
-     * important for the refresh case (so the tab correctly re-acquires the
-     * primary lease). LocalStorage is used for this rather than IndexedDb because
-     * it is a synchronous API and so can be used reliably from  an unload
-     * handler.
-     */    io() {
-        "function" == typeof this.window?.addEventListener && (this.z_ = () => {
-            // Note: In theory, this should be scheduled on the AsyncQueue since it
-            // accesses internal state. We execute this code directly during shutdown
-            // to make sure it gets a chance to run.
-            this.Ao();
-            const e = /(?:Version|Mobile)\/1[456]/;
-            isSafari() && (navigator.appVersion.match(e) || navigator.userAgent.match(e)) && 
-            // On Safari 14, 15, and 16, we do not run any cleanup actions as it might
-            // trigger a bug that prevents Safari from re-opening IndexedDB during
-            // the next page load.
-            // See https://bugs.webkit.org/show_bug.cgi?id=226547
-            this.Tn.enterRestrictedMode(/* purgeExistingTasks= */ true), this.Tn.enqueueAndForget((() => this.shutdown()));
-        }, this.window.addEventListener("pagehide", this.z_));
-    }
-    fo() {
-        this.z_ && (this.window.removeEventListener("pagehide", this.z_), this.z_ = null);
-    }
-    /**
-     * Returns whether a client is "zombied" based on its LocalStorage entry.
-     * Clients become zombied when their tab closes without running all of the
-     * cleanup logic in `shutdown()`.
-     */    Io(e) {
-        try {
-            const t = null !== this.eo?.getItem(this.Ro(e));
-            return __PRIVATE_logDebug(rn, `Client '${e}' ${t ? "is" : "is not"} zombied in LocalStorage`), 
-            t;
-        } catch (e) {
-            // Gracefully handle if LocalStorage isn't working.
-            return __PRIVATE_logError(rn, "Failed to get zombied client id.", e), false;
-        }
-    }
-    /**
-     * Record client as zombied (a client that had its tab closed). Zombied
-     * clients are ignored during primary tab selection.
-     */    Ao() {
-        if (this.eo) try {
-            this.eo.setItem(this.Ro(this.clientId), String(Date.now()));
-        } catch (e) {
-            // Gracefully handle if LocalStorage isn't available / working.
-            __PRIVATE_logError("Failed to set zombie client id.", e);
-        }
-    }
-    /** Removes the zombied client entry if it exists. */    mo() {
-        if (this.eo) try {
-            this.eo.removeItem(this.Ro(this.clientId));
-        } catch (e) {
-            // Ignore
-        }
-    }
-    Ro(e) {
-        return `firestore_zombie_${this.persistenceKey}_${e}`;
-    }
-}
-
-/**
- * Helper to get a typed SimpleDbStore for the primary client object store.
- */ function __PRIVATE_primaryClientStore(e) {
-    return __PRIVATE_getStore(e, Q);
-}
-
-/**
- * Helper to get a typed SimpleDbStore for the client metadata object store.
- */ function __PRIVATE_clientMetadataStore(e) {
-    return __PRIVATE_getStore(e, de);
-}
-
-/**
- * Generates a string used as a prefix when storing data in IndexedDB and
- * LocalStorage.
- */ function __PRIVATE_indexedDbStoragePrefix(e, t) {
-    // Use two different prefix formats:
-    //   * firestore / persistenceKey / projectID . databaseID / ...
-    //   * firestore / persistenceKey / projectID / ...
-    // projectIDs are DNS-compatible names and cannot contain dots
-    // so there's no danger of collisions.
-    let n = e.projectId;
-    return e.isDefaultDatabase || (n += "." + e.database), "firestore/" + t + "/" + n + "/";
-}
-
-/**
- * @license
  * Copyright 2017 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -35212,28 +30465,6 @@ class __PRIVATE_MemorySharedClientState {
     notifyBundleLoaded(e) {
         // No op.
     }
-}
-
-/**
- * @license
- * Copyright 2020 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-/** The Platform's 'window' implementation or null if not available. */ function __PRIVATE_getWindow() {
-    // `window` is not always available, e.g. in ReactNative and WebWorkers.
-    // eslint-disable-next-line no-restricted-globals
-    return "undefined" != typeof window ? window : null;
 }
 
 /** The Platform's 'document' implementation or null if not available. */ function getDocument() {
@@ -36073,43 +31304,6 @@ class __PRIVATE_LruGcMemoryOfflineComponentProvider extends __PRIVATE_MemoryOffl
 }
 
 /**
- * Provides all components needed for Firestore with IndexedDB persistence.
- */ class __PRIVATE_IndexedDbOfflineComponentProvider extends __PRIVATE_MemoryOfflineComponentProvider {
-    constructor(e, t, n) {
-        super(), this.fc = e, this.cacheSizeBytes = t, this.forceOwnership = n, this.kind = "persistent", 
-        this.synchronizeTabs = false;
-    }
-    async initialize(e) {
-        await super.initialize(e), await this.fc.initialize(this, e), 
-        // Enqueue writes from a previous session
-        await __PRIVATE_syncEngineEnsureWriteCallbacks(this.fc.syncEngine), await __PRIVATE_fillWritePipeline(this.fc.remoteStore), 
-        // NOTE: This will immediately call the listener, so we make sure to
-        // set it after localStore / remoteStore are started.
-        await this.persistence._o((() => (this.gcScheduler && !this.gcScheduler.started && this.gcScheduler.start(), 
-        this.indexBackfillerScheduler && !this.indexBackfillerScheduler.started && this.indexBackfillerScheduler.start(), 
-        Promise.resolve())));
-    }
-    Ac(e) {
-        return __PRIVATE_newLocalStore(this.persistence, new __PRIVATE_QueryEngine, e.initialUser, this.serializer);
-    }
-    Vc(e, t) {
-        const n = this.persistence.referenceDelegate.garbageCollector;
-        return new __PRIVATE_LruScheduler(n, e.asyncQueue, t);
-    }
-    dc(e, t) {
-        const n = new __PRIVATE_IndexBackfiller(t, this.persistence);
-        return new __PRIVATE_IndexBackfillerScheduler(e.asyncQueue, n);
-    }
-    Ic(e) {
-        const t = __PRIVATE_indexedDbStoragePrefix(e.databaseInfo.databaseId, e.databaseInfo.persistenceKey), n = void 0 !== this.cacheSizeBytes ? LruParams.withCacheSize(this.cacheSizeBytes) : LruParams.DEFAULT;
-        return new __PRIVATE_IndexedDbPersistence(this.synchronizeTabs, t, e.clientId, n, e.asyncQueue, __PRIVATE_getWindow(), getDocument(), this.serializer, this.sharedClientState, !!this.forceOwnership);
-    }
-    Rc(e) {
-        return new __PRIVATE_MemorySharedClientState;
-    }
-}
-
-/**
  * Initializes and wires the components that are needed to interface with the
  * network.
  */ class OnlineComponentProvider {
@@ -36600,28 +31794,6 @@ function __PRIVATE_configureFirestore(e) {
  * turn on IndexedDb cache. Calling this function when `FirestoreSettings.localCache`
  * is already specified will throw an exception.
  */ (e._componentsProvider));
-}
-
-function enableIndexedDbPersistence(e, t) {
-    __PRIVATE_logWarn("enableIndexedDbPersistence() will be deprecated in the future, you can use `FirestoreSettings.cache` instead.");
-    const n = e._freezeSettings();
-    return __PRIVATE_setPersistenceProviders(e, OnlineComponentProvider.provider, {
-        build: e => new __PRIVATE_IndexedDbOfflineComponentProvider(e, n.cacheSizeBytes, t?.forceOwnership)
-    }), Promise.resolve();
-}
-
-/**
- * Registers both the `OfflineComponentProvider` and `OnlineComponentProvider`.
- * If the operation fails with a recoverable error (see
- * `canRecoverFromIndexedDbError()` below), the returned Promise is rejected
- * but the client remains usable.
- */ function __PRIVATE_setPersistenceProviders(e, t, n) {
-    if ((e = __PRIVATE_cast(e, Firestore))._firestoreClient || e._terminated) throw new FirestoreError(D.FAILED_PRECONDITION, "Firestore has already been started and persistence can no longer be enabled. You can only enable persistence before calling any other methods on a Firestore object.");
-    if (e._componentsProvider || e._getSettings().localCache) throw new FirestoreError(D.FAILED_PRECONDITION, "SDK cache is already specified.");
-    e._componentsProvider = {
-        _online: t,
-        _offline: n
-    }, __PRIVATE_configureFirestore(e);
 }
 
 const Yt = "@firebase/firestore", Kt = "4.16.0";
@@ -37166,13 +32338,6 @@ const app = initializeApp(firebaseConfig);
 getAuth(app);
 const db = getFirestore(app);
 
-// Enable offline persistence
-try {
-  enableIndexedDbPersistence(db);
-} catch (err) {
-  console.warn('FocusFlow: Firestore persistence not available:', err.code);
-}
-
 /**
  * FocusFlow — Firestore Sync Engine
  * Handles bidirectional sync between chrome.storage.local and Firestore.
@@ -37264,22 +32429,35 @@ async function syncStreaksToFirestore(uid) {
 /**
  * FocusFlow — Website Blocker (Focus Mode)
  * Uses chrome.declarativeNetRequest to redirect blocked domains to a custom block page.
+ *
+ * Fix: IDs start at 10000 to avoid collisions with any static rulesets.
+ * Fix: remove + add happen in a SINGLE atomic updateDynamicRules call to prevent
+ *      "Rule with id X does not have a unique ID" errors.
  */
 
+const RULE_ID_BASE = 10000; // High base to avoid collisions with static rules
 
 /**
- * Update declarativeNetRequest rules to block specified domains
+ * Update declarativeNetRequest rules to block specified domains.
+ * Atomically removes existing rules and adds new ones in one call.
  * @param {string[]} domains — list of domains to block
  */
 async function updateBlockRules(domains) {
-  if (!domains || domains.length === 0) return;
+  if (!domains || domains.length === 0) {
+    await clearBlockRules();
+    return;
+  }
 
-  // Remove existing dynamic rules first
-  await clearBlockRules();
+  // Get existing dynamic rule IDs so we can remove them atomically
+  let existingRuleIds = [];
+  try {
+    const existing = await chrome.declarativeNetRequest.getDynamicRules();
+    existingRuleIds = existing.map(r => r.id);
+  } catch (_) {}
 
-  // Create redirect rules for each domain
+  // Build new rules with high, unique IDs
   const rules = domains.map((domain, index) => ({
-    id: index + 1,
+    id: RULE_ID_BASE + index,
     priority: 1,
     action: {
       type: 'redirect',
@@ -37294,9 +32472,10 @@ async function updateBlockRules(domains) {
   }));
 
   try {
+    // Single atomic call: remove old + add new simultaneously
     await chrome.declarativeNetRequest.updateDynamicRules({
-      addRules: rules,
-      removeRuleIds: [] // Already cleared above
+      removeRuleIds: existingRuleIds,
+      addRules: rules
     });
     console.log(`FocusFlow: Blocked ${domains.length} domains`);
   } catch (error) {
@@ -37318,7 +32497,6 @@ async function clearBlockRules() {
         addRules: []
       });
     }
-    console.log('FocusFlow: Cleared all block rules');
   } catch (error) {
     console.error('FocusFlow: Failed to clear block rules', error);
   }
@@ -37339,8 +32517,14 @@ const ALARM_SYNC = 'focusflow_sync';
 const ALARM_DAILY_RESET = 'focusflow_daily_reset';
 const ALARM_FOCUS_END = 'focusflow_focus_end';
 const ALARM_ALERTS = 'focusflow_alerts';
+const ALARM_POMODORO = 'focusflow_pomodoro';
 const HEARTBEAT_SECONDS = 10; // flush tracking data every 10s
-const SYNC_MINUTES = 5; // sync to Firestore every 5 minutes
+const SYNC_MINUTES = 0.5; // sync to Firestore every 30 seconds
+
+// Pomodoro durations
+const POMO_WORK_SECONDS = 25 * 60;
+const POMO_SHORT_BREAK_SECONDS = 5 * 60;
+const POMO_LONG_BREAK_SECONDS = 15 * 60;
 
 // ── State (will be lost on service worker restart — rebuilt from events) ──
 let currentDomain = null;
@@ -37374,6 +32558,9 @@ async function initialize() {
   // Alert checks every 5 minutes
   chrome.alarms.create(ALARM_ALERTS, { periodInMinutes: 5 });
 
+  // Restore pomodoro alarm if it was running
+  await restorePomodoroAlarm();
+
   // Daily reset at midnight — approximate with hourly check
   chrome.alarms.create(ALARM_DAILY_RESET, { periodInMinutes: 60 });
 
@@ -37392,6 +32579,12 @@ async function initialize() {
 
   // Start tracking the current active tab
   await trackActiveTab();
+
+  // Force a guaranteed 30s sync interval while service worker is awake
+  // (chrome.alarms limits to 1 minute minimum in production)
+  setInterval(() => {
+    handleSync().catch(() => {});
+  }, 30 * 1000);
 }
 
 // ── Tab Events ───────────────────────────────────────────────────────
@@ -37449,6 +32642,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     case ALARM_ALERTS:
       await checkAlerts();
       break;
+    case ALARM_POMODORO:
+      await handlePomodoroTick();
+      break;
   }
 });
 
@@ -37494,6 +32690,19 @@ async function handleMessage(message, sender) {
     case 'FORCE_SYNC':
       await handleSync();
       return { ok: true };
+
+    // ── Pomodoro Messages ──────────────────────────────────────────────
+    case 'START_POMODORO':
+      return await startPomodoro();
+
+    case 'PAUSE_POMODORO':
+      return await pausePomodoro();
+
+    case 'RESET_POMODORO':
+      return await resetPomodoro();
+
+    case 'GET_POMODORO_STATE':
+      return await getPomodoroState();
 
     default:
       return { error: 'Unknown message type' };
@@ -37564,6 +32773,7 @@ async function handleHeartbeat() {
     if (elapsed > 0) {
       const category = classifyDomain(session.domain);
       await updateDomainTime(session.domain, elapsed, category);
+      await syncToFirestore().catch(() => {});
     }
   }
 }
@@ -37746,6 +32956,134 @@ async function calculateProductivityScoreForDate(dateKey) {
   const score = Math.round(Math.max(0, Math.min(100, (productiveRatio * 100) - (unproductiveRatio * 30))));
 
   return { score, productiveTime, unproductiveTime, totalTime };
+}
+
+// ── Pomodoro ─────────────────────────────────────────────────────────
+
+/**
+ * Start the pomodoro timer
+ */
+async function startPomodoro() {
+  const state = await getPomodoroState();
+  if (state.status === 'running') return state; // Already running
+
+  const duration = state.isBreak
+    ? (state.sessionsCompleted % 4 === 0 && state.sessionsCompleted > 0 ? POMO_LONG_BREAK_SECONDS : POMO_SHORT_BREAK_SECONDS)
+    : POMO_WORK_SECONDS;
+
+  const timeLeft = state.status === 'paused' ? state.timeLeft : duration;
+  const endTimestamp = Date.now() + timeLeft * 1000;
+
+  const newState = { ...state, status: 'running', timeLeft, endTimestamp };
+  await savePomodoroState(newState);
+
+  // Create a repeating 1-minute alarm — we calculate from endTimestamp on each tick
+  await chrome.alarms.clear(ALARM_POMODORO);
+  chrome.alarms.create(ALARM_POMODORO, { periodInMinutes: 1 / 60 }); // ~1s
+
+  return newState;
+}
+
+/**
+ * Pause the pomodoro timer
+ */
+async function pausePomodoro() {
+  const state = await getPomodoroState();
+  if (state.status !== 'running') return state;
+
+  const timeLeft = Math.max(0, Math.round((state.endTimestamp - Date.now()) / 1000));
+  const newState = { ...state, status: 'paused', timeLeft, endTimestamp: null };
+  await savePomodoroState(newState);
+  await chrome.alarms.clear(ALARM_POMODORO);
+  return newState;
+}
+
+/**
+ * Reset the pomodoro timer to idle
+ */
+async function resetPomodoro() {
+  await chrome.alarms.clear(ALARM_POMODORO);
+  const newState = {
+    status: 'idle',
+    timeLeft: POMO_WORK_SECONDS,
+    sessionsCompleted: 0,
+    isBreak: false,
+    endTimestamp: null
+  };
+  await savePomodoroState(newState);
+  return newState;
+}
+
+/**
+ * Called every ~1 second by the pomodoro alarm to check if interval is done
+ */
+async function handlePomodoroTick() {
+  const state = await getPomodoroState();
+  if (state.status !== 'running' || !state.endTimestamp) return;
+
+  const timeLeft = Math.max(0, Math.round((state.endTimestamp - Date.now()) / 1000));
+
+  if (timeLeft <= 0) {
+    // Interval finished!
+    await chrome.alarms.clear(ALARM_POMODORO);
+
+    if (!state.isBreak) {
+      // Work session done → start break
+      const sessions = state.sessionsCompleted + 1;
+      const isLongBreak = sessions % 4 === 0;
+      const breakDuration = isLongBreak ? POMO_LONG_BREAK_SECONDS : POMO_SHORT_BREAK_SECONDS;
+      const newState = {
+        status: 'idle',
+        timeLeft: breakDuration,
+        sessionsCompleted: sessions,
+        isBreak: true,
+        endTimestamp: null
+      };
+      await savePomodoroState(newState);
+      chrome.notifications.create('focusflow_pomo_work_done', {
+        type: 'basic',
+        iconUrl: 'icons/icon128.png',
+        title: isLongBreak ? '🎉 4 Sessions Done! Long Break Time!' : '✅ Focus Session Done!',
+        message: isLongBreak ? `Take a 15-minute long break. You've earned it!` : `Take a 5-minute break. Great work!`,
+        priority: 2
+      });
+    } else {
+      // Break done → back to work
+      const newState = {
+        status: 'idle',
+        timeLeft: POMO_WORK_SECONDS,
+        sessionsCompleted: state.sessionsCompleted,
+        isBreak: false,
+        endTimestamp: null
+      };
+      await savePomodoroState(newState);
+      chrome.notifications.create('focusflow_pomo_break_done', {
+        type: 'basic',
+        iconUrl: 'icons/icon128.png',
+        title: '🍅 Break Over — Back to Work!',
+        message: 'Ready for the next focus session? Click to start.',
+        priority: 2
+      });
+    }
+  } else {
+    // Still running — just update timeLeft in storage
+    await savePomodoroState({ ...state, timeLeft });
+  }
+}
+
+/**
+ * On service worker restart, restore pomodoro alarm if timer was running
+ */
+async function restorePomodoroAlarm() {
+  const state = await getPomodoroState();
+  if (state.status === 'running' && state.endTimestamp) {
+    if (Date.now() < state.endTimestamp) {
+      chrome.alarms.create(ALARM_POMODORO, { periodInMinutes: 1 / 60 });
+    } else {
+      // Expired while service worker was asleep — handle the finish
+      await handlePomodoroTick();
+    }
+  }
 }
 
 // Initialize on script load (handles service worker wakeup)

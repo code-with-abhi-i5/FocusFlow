@@ -7,7 +7,7 @@
  */
 
 import { extractDomain, shouldIgnoreUrl, startTracking, stopTracking, pauseTracking, resumeTracking, flushElapsed, getCurrentSession } from '../utils/tracker.js';
-import { updateDomainTime, startSession, endSession, getTodayData, getTodayTotalTime, getTopDomainsToday, cleanupOldData, getSettings, getFocusMode, saveFocusMode, getStreaks, saveStreaks, getTodayKey } from '../utils/storage.js';
+import { updateDomainTime, startSession, endSession, getTodayData, getTodayTotalTime, getTopDomainsToday, cleanupOldData, getSettings, getFocusMode, saveFocusMode, getStreaks, saveStreaks, getTodayKey, getPomodoroState, savePomodoroState } from '../utils/storage.js';
 import { classifyDomain, initCategories } from '../utils/categories.js';
 import { initIdleDetection, isUserActive } from '../utils/idle.js';
 import { checkAlerts, resetDailyAlerts } from '../utils/alerts.js';
@@ -20,8 +20,14 @@ const ALARM_SYNC = 'focusflow_sync';
 const ALARM_DAILY_RESET = 'focusflow_daily_reset';
 const ALARM_FOCUS_END = 'focusflow_focus_end';
 const ALARM_ALERTS = 'focusflow_alerts';
+const ALARM_POMODORO = 'focusflow_pomodoro';
 const HEARTBEAT_SECONDS = 10; // flush tracking data every 10s
 const SYNC_MINUTES = 0.5; // sync to Firestore every 30 seconds
+
+// Pomodoro durations
+const POMO_WORK_SECONDS = 25 * 60;
+const POMO_SHORT_BREAK_SECONDS = 5 * 60;
+const POMO_LONG_BREAK_SECONDS = 15 * 60;
 
 // ── State (will be lost on service worker restart — rebuilt from events) ──
 let currentDomain = null;
@@ -54,6 +60,9 @@ async function initialize() {
 
   // Alert checks every 5 minutes
   chrome.alarms.create(ALARM_ALERTS, { periodInMinutes: 5 });
+
+  // Restore pomodoro alarm if it was running
+  await restorePomodoroAlarm();
 
   // Daily reset at midnight — approximate with hourly check
   chrome.alarms.create(ALARM_DAILY_RESET, { periodInMinutes: 60 });
@@ -136,6 +145,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     case ALARM_ALERTS:
       await checkAlerts();
       break;
+    case ALARM_POMODORO:
+      await handlePomodoroTick();
+      break;
   }
 });
 
@@ -181,6 +193,19 @@ async function handleMessage(message, sender) {
     case 'FORCE_SYNC':
       await handleSync();
       return { ok: true };
+
+    // ── Pomodoro Messages ──────────────────────────────────────────────
+    case 'START_POMODORO':
+      return await startPomodoro();
+
+    case 'PAUSE_POMODORO':
+      return await pausePomodoro();
+
+    case 'RESET_POMODORO':
+      return await resetPomodoro();
+
+    case 'GET_POMODORO_STATE':
+      return await getPomodoroState();
 
     default:
       return { error: 'Unknown message type' };
@@ -434,6 +459,134 @@ async function calculateProductivityScoreForDate(dateKey) {
   const score = Math.round(Math.max(0, Math.min(100, (productiveRatio * 100) - (unproductiveRatio * 30))));
 
   return { score, productiveTime, unproductiveTime, totalTime };
+}
+
+// ── Pomodoro ─────────────────────────────────────────────────────────
+
+/**
+ * Start the pomodoro timer
+ */
+async function startPomodoro() {
+  const state = await getPomodoroState();
+  if (state.status === 'running') return state; // Already running
+
+  const duration = state.isBreak
+    ? (state.sessionsCompleted % 4 === 0 && state.sessionsCompleted > 0 ? POMO_LONG_BREAK_SECONDS : POMO_SHORT_BREAK_SECONDS)
+    : POMO_WORK_SECONDS;
+
+  const timeLeft = state.status === 'paused' ? state.timeLeft : duration;
+  const endTimestamp = Date.now() + timeLeft * 1000;
+
+  const newState = { ...state, status: 'running', timeLeft, endTimestamp };
+  await savePomodoroState(newState);
+
+  // Create a repeating 1-minute alarm — we calculate from endTimestamp on each tick
+  await chrome.alarms.clear(ALARM_POMODORO);
+  chrome.alarms.create(ALARM_POMODORO, { periodInMinutes: 1 / 60 }); // ~1s
+
+  return newState;
+}
+
+/**
+ * Pause the pomodoro timer
+ */
+async function pausePomodoro() {
+  const state = await getPomodoroState();
+  if (state.status !== 'running') return state;
+
+  const timeLeft = Math.max(0, Math.round((state.endTimestamp - Date.now()) / 1000));
+  const newState = { ...state, status: 'paused', timeLeft, endTimestamp: null };
+  await savePomodoroState(newState);
+  await chrome.alarms.clear(ALARM_POMODORO);
+  return newState;
+}
+
+/**
+ * Reset the pomodoro timer to idle
+ */
+async function resetPomodoro() {
+  await chrome.alarms.clear(ALARM_POMODORO);
+  const newState = {
+    status: 'idle',
+    timeLeft: POMO_WORK_SECONDS,
+    sessionsCompleted: 0,
+    isBreak: false,
+    endTimestamp: null
+  };
+  await savePomodoroState(newState);
+  return newState;
+}
+
+/**
+ * Called every ~1 second by the pomodoro alarm to check if interval is done
+ */
+async function handlePomodoroTick() {
+  const state = await getPomodoroState();
+  if (state.status !== 'running' || !state.endTimestamp) return;
+
+  const timeLeft = Math.max(0, Math.round((state.endTimestamp - Date.now()) / 1000));
+
+  if (timeLeft <= 0) {
+    // Interval finished!
+    await chrome.alarms.clear(ALARM_POMODORO);
+
+    if (!state.isBreak) {
+      // Work session done → start break
+      const sessions = state.sessionsCompleted + 1;
+      const isLongBreak = sessions % 4 === 0;
+      const breakDuration = isLongBreak ? POMO_LONG_BREAK_SECONDS : POMO_SHORT_BREAK_SECONDS;
+      const newState = {
+        status: 'idle',
+        timeLeft: breakDuration,
+        sessionsCompleted: sessions,
+        isBreak: true,
+        endTimestamp: null
+      };
+      await savePomodoroState(newState);
+      chrome.notifications.create('focusflow_pomo_work_done', {
+        type: 'basic',
+        iconUrl: 'icons/icon128.png',
+        title: isLongBreak ? '🎉 4 Sessions Done! Long Break Time!' : '✅ Focus Session Done!',
+        message: isLongBreak ? `Take a 15-minute long break. You've earned it!` : `Take a 5-minute break. Great work!`,
+        priority: 2
+      });
+    } else {
+      // Break done → back to work
+      const newState = {
+        status: 'idle',
+        timeLeft: POMO_WORK_SECONDS,
+        sessionsCompleted: state.sessionsCompleted,
+        isBreak: false,
+        endTimestamp: null
+      };
+      await savePomodoroState(newState);
+      chrome.notifications.create('focusflow_pomo_break_done', {
+        type: 'basic',
+        iconUrl: 'icons/icon128.png',
+        title: '🍅 Break Over — Back to Work!',
+        message: 'Ready for the next focus session? Click to start.',
+        priority: 2
+      });
+    }
+  } else {
+    // Still running — just update timeLeft in storage
+    await savePomodoroState({ ...state, timeLeft });
+  }
+}
+
+/**
+ * On service worker restart, restore pomodoro alarm if timer was running
+ */
+async function restorePomodoroAlarm() {
+  const state = await getPomodoroState();
+  if (state.status === 'running' && state.endTimestamp) {
+    if (Date.now() < state.endTimestamp) {
+      chrome.alarms.create(ALARM_POMODORO, { periodInMinutes: 1 / 60 });
+    } else {
+      // Expired while service worker was asleep — handle the finish
+      await handlePomodoroTick();
+    }
+  }
 }
 
 // Initialize on script load (handles service worker wakeup)

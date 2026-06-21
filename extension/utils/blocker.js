@@ -1,23 +1,35 @@
 /**
  * FocusFlow — Website Blocker (Focus Mode)
  * Uses chrome.declarativeNetRequest to redirect blocked domains to a custom block page.
+ *
+ * Fix: IDs start at 10000 to avoid collisions with any static rulesets.
+ * Fix: remove + add happen in a SINGLE atomic updateDynamicRules call to prevent
+ *      "Rule with id X does not have a unique ID" errors.
  */
 
-const RULESET_ID = 'focus_mode_rules';
+const RULE_ID_BASE = 10000; // High base to avoid collisions with static rules
 
 /**
- * Update declarativeNetRequest rules to block specified domains
+ * Update declarativeNetRequest rules to block specified domains.
+ * Atomically removes existing rules and adds new ones in one call.
  * @param {string[]} domains — list of domains to block
  */
 export async function updateBlockRules(domains) {
-  if (!domains || domains.length === 0) return;
+  if (!domains || domains.length === 0) {
+    await clearBlockRules();
+    return;
+  }
 
-  // Remove existing dynamic rules first
-  await clearBlockRules();
+  // Get existing dynamic rule IDs so we can remove them atomically
+  let existingRuleIds = [];
+  try {
+    const existing = await chrome.declarativeNetRequest.getDynamicRules();
+    existingRuleIds = existing.map(r => r.id);
+  } catch (_) {}
 
-  // Create redirect rules for each domain
+  // Build new rules with high, unique IDs
   const rules = domains.map((domain, index) => ({
-    id: index + 1,
+    id: RULE_ID_BASE + index,
     priority: 1,
     action: {
       type: 'redirect',
@@ -32,9 +44,10 @@ export async function updateBlockRules(domains) {
   }));
 
   try {
+    // Single atomic call: remove old + add new simultaneously
     await chrome.declarativeNetRequest.updateDynamicRules({
-      addRules: rules,
-      removeRuleIds: [] // Already cleared above
+      removeRuleIds: existingRuleIds,
+      addRules: rules
     });
     console.log(`FocusFlow: Blocked ${domains.length} domains`);
   } catch (error) {
@@ -56,7 +69,6 @@ export async function clearBlockRules() {
         addRules: []
       });
     }
-    console.log('FocusFlow: Cleared all block rules');
   } catch (error) {
     console.error('FocusFlow: Failed to clear block rules', error);
   }

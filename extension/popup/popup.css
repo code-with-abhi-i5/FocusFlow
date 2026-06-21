@@ -491,3 +491,241 @@ body {
 .popup-container > *:nth-child(3) { animation-delay: 100ms; }
 .popup-container > *:nth-child(4) { animation-delay: 150ms; }
 .popup-container > *:nth-child(5) { animation-delay: 200ms; }
+
+/* ── Daily Goal Bar ────────────────────────────────────────────────── */
+
+.goal-section {
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+}
+
+.goal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.goal-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.goal-text {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent-primary);
+}
+
+.goal-bar {
+  position: relative;
+  height: 8px;
+  background: var(--ring-bg);
+  border-radius: 6px;
+  overflow: visible;
+}
+
+.goal-bar-fill {
+  height: 100%;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
+  transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+}
+
+.goal-bar-fill::after {
+  content: '';
+  position: absolute;
+  right: -1px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent-secondary);
+  box-shadow: 0 0 8px rgba(139, 92, 246, 0.6);
+}
+
+.goal-bar-fill[style*="width: 0"]::after,
+.goal-bar-fill[style*="width:0"]::after {
+  display: none;
+}
+
+.goal-milestone {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 14px;
+  background: var(--border-color);
+  border-radius: 2px;
+  z-index: 2;
+}
+
+/* Goal achieved glow */
+.goal-section.achieved .goal-bar-fill {
+  background: linear-gradient(90deg, #10b981, #06b6d4);
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.4);
+}
+
+/* ── Pomodoro Timer ────────────────────────────────────────────────── */
+
+.pomodoro-section {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  transition: border-color 0.3s ease;
+}
+
+.pomodoro-section.is-running {
+  border-color: rgba(99, 102, 241, 0.35);
+  box-shadow: 0 0 16px rgba(99, 102, 241, 0.08);
+}
+
+.pomodoro-section.is-break {
+  border-color: rgba(16, 185, 129, 0.35);
+  box-shadow: 0 0 16px rgba(16, 185, 129, 0.08);
+}
+
+/* Pomo Ring */
+.pomo-left {
+  position: relative;
+  flex-shrink: 0;
+  width: 72px;
+  height: 72px;
+}
+
+.pomo-ring {
+  width: 72px;
+  height: 72px;
+  transform: rotate(-90deg);
+}
+
+.pomo-ring-bg {
+  stroke: var(--ring-bg);
+}
+
+.pomo-ring-progress {
+  stroke: url(#pomoGradWork);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.9s cubic-bezier(0.4, 0, 0.2, 1), stroke 0.4s ease;
+}
+
+.pomodoro-section.is-break .pomo-ring-progress {
+  stroke: url(#pomoGradBreak);
+}
+
+.pomo-time-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+}
+
+.pomo-time {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--text-primary);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.pomo-mode {
+  font-size: 8px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+/* Pomo Right */
+.pomo-right {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pomo-sessions {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.pomo-sessions-count {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+.pomo-sessions-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.pomo-controls {
+  display: flex;
+  gap: 6px;
+}
+
+.pomo-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 0;
+}
+
+.pomo-start {
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+  color: white;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+}
+
+.pomo-start:hover {
+  transform: scale(1.08);
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+}
+
+.pomo-pause {
+  background: linear-gradient(135deg, #f59e0b, #ef4444);
+  color: white;
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
+}
+
+.pomo-pause:hover {
+  transform: scale(1.08);
+}
+
+.pomo-reset {
+  background: var(--bg-card-hover);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.pomo-reset:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-primary);
+  border-color: var(--border-hover);
+  transform: rotate(30deg) scale(1.05);
+}
+
