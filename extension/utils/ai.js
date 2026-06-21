@@ -84,7 +84,8 @@ ${dataContext}
       lastFetchTime = Date.now();
       return { insight: cachedInsight };
     } else {
-      return { error: 'Failed to parse AI response.' };
+      console.error('FocusFlow AI Raw Response:', data);
+      return { error: `Format Error. Raw response: ${JSON.stringify(data)}` };
     }
 
   } catch (err) {
