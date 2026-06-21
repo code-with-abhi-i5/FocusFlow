@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FocusFlow — Settings</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #0a0a0f;
+      --bg-secondary: #111118;
+      --bg-card: rgba(255,255,255,0.04);
+      --border-color: rgba(255,255,255,0.08);
+      --text-primary: #f0f0f5;
+      --text-secondary: #8b8b9e;
+      --text-muted: #55556a;
+      --accent: #6366f1;
+      --accent-secondary: #8b5cf6;
+      --productive: #10b981;
+      --unproductive: #ef4444;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      -webkit-font-smoothing: antialiased;
+      min-height: 100vh;
+    }
+
+    .options-container {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 40px 24px;
+    }
+
+    .options-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 40px;
+    }
+
+    .options-header .logo {
+      width: 40px; height: 40px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-secondary));
+      display: flex; align-items: center; justify-content: center;
+      color: white;
+    }
+
+    .options-header h1 {
+      font-size: 24px;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent), var(--accent-secondary));
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+    }
+
+    .section {
+      margin-bottom: 32px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 24px;
+    }
+
+    .section-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 20px;
+    }
+
+    .form-group {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .form-group:last-child { border-bottom: none; }
+
+    .form-label {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    .form-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    input[type="number"], select {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-family: 'Inter', sans-serif;
+      font-size: 14px;
+      width: 100px;
+      outline: none;
+    }
+
+    input:focus, select:focus {
+      border-color: var(--accent);
+    }
+
+    /* Toggle switch */
+    .toggle {
+      position: relative;
+      width: 44px; height: 24px;
+      cursor: pointer;
+    }
+
+    .toggle input { opacity: 0; width: 0; height: 0; }
+
+    .toggle-slider {
+      position: absolute; inset: 0;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      transition: all 0.3s;
+    }
+
+    .toggle-slider::before {
+      content: '';
+      position: absolute;
+      width: 18px; height: 18px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      top: 2px; left: 2px;
+      transition: all 0.3s;
+    }
+
+    .toggle input:checked + .toggle-slider {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .toggle input:checked + .toggle-slider::before {
+      transform: translateX(20px);
+      background: white;
+    }
+
+    /* Category management */
+    .category-section { margin-top: 16px; }
+
+    .category-title {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      display: flex; align-items: center; gap: 8px;
+    }
+
+    .category-title .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+    }
+
+    .category-title .dot.productive { background: var(--productive); }
+    .category-title .dot.unproductive { background: var(--unproductive); }
+
+    .domain-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .domain-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .domain-tag .remove-btn {
+      background: none; border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+      padding: 0;
+    }
+
+    .domain-tag .remove-btn:hover { color: var(--unproductive); }
+
+    .add-domain-row {
+      display: flex; gap: 8px;
+    }
+
+    .add-domain-row input {
+      flex: 1;
+      width: auto;
+    }
+
+    .btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 8px;
+      font-family: 'Inter', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent-secondary));
+      color: white;
+    }
+
+    .btn-primary:hover { opacity: 0.9; transform: translateY(-1px); }
+
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--border-color);
+      color: var(--text-secondary);
+    }
+
+    .btn-outline:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .save-bar {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      padding: 16px 24px;
+      background: rgba(10, 10, 15, 0.95);
+      backdrop-filter: blur(20px);
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+      z-index: 10;
+    }
+
+    .status-msg {
+      font-size: 13px;
+      color: var(--productive);
+      margin-right: auto;
+      align-self: center;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .status-msg.visible { opacity: 1; }
+
+    /* Google Sign In button */
+    .btn-google {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: white;
+      color: #3c4043;
+      border: 1px solid #dadce0;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-family: 'Inter', sans-serif;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-google:hover { background: #f8f9fa; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+
+    /* User card (logged in) */
+    .user-card {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 12px;
+      background: rgba(16,185,129,0.05);
+      border: 1px solid rgba(16,185,129,0.2);
+      border-radius: 12px;
+      margin-bottom: 12px;
+    }
+    .user-avatar {
+      width: 44px; height: 44px;
+      border-radius: 50%;
+      border: 2px solid rgba(99,102,241,0.4);
+    }
+    .user-info { flex: 1; }
+    .uid-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: var(--bg-secondary);
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+    }
+  </style>
+
+</head>
+<body>
+  <div class="options-container">
+    <header class="options-header">
+      <div class="logo">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+        </svg>
+      </div>
+      <h1>FocusFlow Settings</h1>
+    </header>
+
+    <!-- General Settings -->
+    <div class="section">
+      <h2 class="section-title">General</h2>
+      <div class="form-group" style="flex-direction: column; align-items: flex-start; gap: 8px;">
+        <div style="width: 100%;">
+          <div class="form-label">Dashboard Sync Key</div>
+          <div class="form-desc">Paste your Sync Key from the Dashboard here to connect your data.</div>
+        </div>
+        <input type="text" id="syncKeyInput" placeholder="Paste your Sync Key" style="width: 100%; max-width: 400px; padding: 10px; font-family: monospace;">
+      </div>
+      <div class="form-group">
+        <div>
+          <div class="form-label">Notifications</div>
+          <div class="form-desc">Show alerts when time limits are exceeded</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="notificationsEnabled" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="form-group">
+        <div>
+          <div class="form-label">Idle Timeout</div>
+          <div class="form-desc">Pause tracking after this many seconds of inactivity</div>
+        </div>
+        <input type="number" id="idleTimeout" value="60" min="15" max="300">
+      </div>
+      <div class="form-group">
+        <div>
+          <div class="form-label">Theme</div>
+          <div class="form-desc">Choose your preferred appearance</div>
+        </div>
+        <select id="themeSelect">
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+        </select>
+      </div>
+    </div>
+
+
+
+
+
+
+    <!-- Goals -->
+    <div class="section">
+      <h2 class="section-title">Goals</h2>
+      <div class="form-group">
+        <div>
+          <div class="form-label">Daily Productive Hours</div>
+          <div class="form-desc">Target productive hours per day</div>
+        </div>
+        <input type="number" id="dailyProductiveHours" value="4" min="1" max="16" step="0.5">
+      </div>
+      <div class="form-group">
+        <div>
+          <div class="form-label">Social Media Limit (minutes)</div>
+          <div class="form-desc">Maximum daily social media usage</div>
+        </div>
+        <input type="number" id="socialMediaLimit" value="120" min="15" max="480" step="15">
+      </div>
+    </div>
+
+    <!-- Categories -->
+    <div class="section">
+      <h2 class="section-title">Domain Categories</h2>
+
+      <div class="category-section">
+        <div class="category-title"><span class="dot productive"></span> Productive</div>
+        <div class="domain-tags" id="productiveTags"></div>
+        <div class="add-domain-row">
+          <input type="text" id="addProductiveDomain" placeholder="e.g. notion.so">
+          <button class="btn btn-outline" id="addProductiveBtn">Add</button>
+        </div>
+      </div>
+
+      <div class="category-section" style="margin-top: 24px;">
+        <div class="category-title"><span class="dot unproductive"></span> Unproductive</div>
+        <div class="domain-tags" id="unproductiveTags"></div>
+        <div class="add-domain-row">
+          <input type="text" id="addUnproductiveDomain" placeholder="e.g. tiktok.com">
+          <button class="btn btn-outline" id="addUnproductiveBtn">Add</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Focus Mode Blocklist -->
+    <div class="section">
+      <h2 class="section-title">Focus Mode Blocklist</h2>
+      <div class="domain-tags" id="blocklistTags"></div>
+      <div class="add-domain-row">
+        <input type="text" id="addBlockDomain" placeholder="e.g. youtube.com">
+        <button class="btn btn-outline" id="addBlockBtn">Add</button>
+      </div>
+    </div>
+
+    <div style="height: 80px;"></div>
+  </div>
+
+  <!-- Save Bar -->
+  <div class="save-bar">
+    <span class="status-msg" id="statusMsg">✓ Settings saved</span>
+    <button class="btn btn-primary" id="saveBtn">Save Settings</button>
+  </div>
+
+  <script src="options.js" type="module"></script>
+</body>
+</html>
