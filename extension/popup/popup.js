@@ -67,6 +67,11 @@ const pomoPause = document.getElementById('pomoPause');
 const pomoReset = document.getElementById('pomoReset');
 const pomodoroSection = document.getElementById('pomodoroSection');
 
+// AI Insights
+const aiBtn = document.getElementById('aiBtn');
+const aiCard = document.getElementById('aiCard');
+const aiText = document.getElementById('aiText');
+
 // ── Theme ────────────────────────────────────────────────────────────
 
 async function initTheme() {
@@ -202,11 +207,41 @@ function updateSitesList(sites, totalTime) {
           </div>
         </div>
         <span class="site-time">${formatTime(site.timeSpent)}</span>
-        <span class="site-category-dot ${category}"></span>
+        <span class="site-category-dot ${category}" data-domain="${site.domain}" data-category="${category}" title="Click to change category"></span>
       </div>
     `;
   }).join('');
 }
+
+// Global click handler for dynamic category dots
+document.addEventListener('click', async (e) => {
+  if (e.target.classList.contains('site-category-dot')) {
+    const domain = e.target.getAttribute('data-domain');
+    const currentCategory = e.target.getAttribute('data-category');
+    
+    // Cycle: neutral -> productive -> unproductive -> neutral
+    const cycle = {
+      'neutral': 'productive',
+      'productive': 'unproductive',
+      'unproductive': 'neutral'
+    };
+    const nextCategory = cycle[currentCategory] || 'neutral';
+    
+    // Optimistic UI update
+    e.target.setAttribute('data-category', nextCategory);
+    e.target.className = `site-category-dot ${nextCategory}`;
+
+    // Send to background
+    await chrome.runtime.sendMessage({ 
+      type: 'UPDATE_CATEGORY', 
+      domain, 
+      category: nextCategory 
+    });
+    
+    // Refresh data to update score ring
+    loadData();
+  }
+});
 
 // ── Update Current Session ───────────────────────────────────────────
 
@@ -322,6 +357,38 @@ focusToggleEl.addEventListener('click', async () => {
     duration: 25
   });
   updateFocusMode(result);
+});
+
+// ── AI Insights ──────────────────────────────────────────────────────
+
+aiBtn.addEventListener('click', async () => {
+  aiBtn.classList.add('loading');
+  aiCard.classList.remove('visible');
+  
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'GET_AI_INSIGHT' });
+    
+    aiBtn.classList.remove('loading');
+    
+    if (response?.error) {
+      if (response.error.includes('API key')) {
+        aiText.innerHTML = `Please add your Gemini API Key in the <a href="#" id="aiOpenOptions">Options</a> to enable insights.`;
+        document.getElementById('aiOpenOptions')?.addEventListener('click', () => chrome.runtime.openOptionsPage());
+      } else {
+        aiText.textContent = response.error;
+      }
+    } else if (response?.insight) {
+      aiText.innerHTML = response.insight.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    } else {
+      aiText.textContent = "Could not generate insight. Please try again.";
+    }
+    
+    aiCard.classList.add('visible');
+  } catch (err) {
+    aiBtn.classList.remove('loading');
+    aiText.textContent = "Error communicating with AI service.";
+    aiCard.classList.add('visible');
+  }
 });
 
 // ── Auto-Refresh ─────────────────────────────────────────────────────

@@ -330,6 +330,13 @@
         </div>
         <input type="text" id="syncKeyInput" placeholder="Paste your Sync Key" style="width: 100%; max-width: 400px; padding: 10px; font-family: monospace;">
       </div>
+      <div class="form-group" style="flex-direction: column; align-items: flex-start; gap: 8px;">
+        <div style="width: 100%;">
+          <div class="form-label">Gemini API Key</div>
+          <div class="form-desc">Used for AI Productivity Insights. Get a free key from Google AI Studio.</div>
+        </div>
+        <input type="password" id="geminiApiKey" placeholder="AIzaSy..." style="width: 100%; max-width: 400px; padding: 10px; font-family: monospace;">
+      </div>
       <div class="form-group">
         <div>
           <div class="form-label">Notifications</div>
@@ -359,11 +366,6 @@
       </div>
     </div>
 
-
-
-
-
-
     <!-- Goals -->
     <div class="section">
       <h2 class="section-title">Goals</h2>
@@ -376,10 +378,22 @@
       </div>
       <div class="form-group">
         <div>
-          <div class="form-label">Social Media Limit (minutes)</div>
+          <div class="form-label">Global Social Media Limit (minutes)</div>
           <div class="form-desc">Maximum daily social media usage</div>
         </div>
         <input type="number" id="socialMediaLimit" value="120" min="15" max="480" step="15">
+      </div>
+    </div>
+
+    <!-- Per-Site Limits -->
+    <div class="section">
+      <h2 class="section-title">Per-Site Time Limits</h2>
+      <div class="form-desc" style="margin-bottom: 12px;">Sites will be auto-blocked for the day when limit is reached.</div>
+      <div class="domain-tags" id="siteLimitsList" style="flex-direction: column; gap: 8px;"></div>
+      <div class="add-domain-row" style="margin-top: 12px;">
+        <input type="text" id="addLimitDomain" placeholder="e.g. youtube.com">
+        <input type="number" id="addLimitMins" placeholder="Mins" style="width: 80px;" min="1" max="1440">
+        <button class="btn btn-outline" id="addLimitBtn">Add Limit</button>
       </div>
     </div>
 

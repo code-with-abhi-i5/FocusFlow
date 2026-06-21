@@ -4,7 +4,8 @@
  * milestones, and motivational reminders.
  */
 
-import { getDomainTimeToday, getTodayData, getGoals, getSettings, getStreaks } from './storage.js';
+import { getDomainTimeToday, getTodayData, getGoals, getSettings, getStreaks, getSiteLimits, getAutoBlockedDomains, saveAutoBlockedDomains, getFocusMode } from './storage.js';
+import { updateBlockRules } from './blocker.js';
 import { classifyDomain, isSocialMedia } from './categories.js';
 import { formatTime } from './tracker.js';
 
@@ -62,26 +63,41 @@ export async function checkAlerts(streaks) {
  */
 async function checkSiteLimits() {
   const dayData = await getTodayData();
-  const thresholds = [30, 45, 60, 90, 120]; // minutes
+  const limits = await getSiteLimits();
+  const autoBlocked = await getAutoBlockedDomains();
+  let updatedAutoBlocked = false;
 
-  for (const [domain, data] of Object.entries(dayData)) {
-    const category = classifyDomain(domain);
-    if (category !== 'unproductive') continue;
+  for (const [domain, limitMins] of Object.entries(limits)) {
+    const data = dayData[domain];
+    if (!data) continue;
 
     const minutesSpent = Math.floor(data.timeSpent / 60);
+    if (minutesSpent >= limitMins && !autoBlocked.includes(domain)) {
+      autoBlocked.push(domain);
+      updatedAutoBlocked = true;
 
-    for (const threshold of thresholds) {
-      const alertKey = `site_${domain}_${threshold}`;
-      if (minutesSpent >= threshold && !alertsShown.has(alertKey)) {
-        alertsShown.add(alertKey);
-        showNotification(
-          '⏰ Time Check',
-          `You've spent ${formatTime(data.timeSpent)} on ${domain} today.`,
-          'time_warning'
-        );
-        break; // Only show the highest unshown threshold
-      }
+      showNotification(
+        '🛑 Site Limit Exceeded',
+        `You've reached your ${limitMins}m limit for ${domain}. It has been blocked for the rest of the day.`,
+        `limit_block_${domain}`
+      );
+    } else if (minutesSpent >= limitMins * 0.8 && !alertsShown.has(`limit_warn_${domain}`)) {
+      // 80% warning
+      alertsShown.add(`limit_warn_${domain}`);
+      showNotification(
+        '⚠️ Limit Approaching',
+        `You have used 80% of your daily limit for ${domain}.`,
+        `limit_warn_${domain}`
+      );
     }
+  }
+
+  if (updatedAutoBlocked) {
+    await saveAutoBlockedDomains(autoBlocked);
+    // Apply rules
+    const focusMode = await getFocusMode();
+    const combined = new Set([...(focusMode.active ? focusMode.blockedDomains : []), ...autoBlocked]);
+    await updateBlockRules(Array.from(combined));
   }
 }
 

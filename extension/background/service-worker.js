@@ -7,12 +7,13 @@
  */
 
 import { extractDomain, shouldIgnoreUrl, startTracking, stopTracking, pauseTracking, resumeTracking, flushElapsed, getCurrentSession } from '../utils/tracker.js';
-import { updateDomainTime, startSession, endSession, getTodayData, getTodayTotalTime, getTopDomainsToday, cleanupOldData, getSettings, getFocusMode, saveFocusMode, getStreaks, saveStreaks, getTodayKey, getPomodoroState, savePomodoroState } from '../utils/storage.js';
+import { updateDomainTime, startSession, endSession, getTodayData, getTodayTotalTime, getTopDomainsToday, cleanupOldData, getSettings, getFocusMode, saveFocusMode, getStreaks, saveStreaks, getTodayKey, getPomodoroState, savePomodoroState, getAutoBlockedDomains, saveAutoBlockedDomains, updateDomainCategory } from '../utils/storage.js';
 import { classifyDomain, initCategories } from '../utils/categories.js';
 import { initIdleDetection, isUserActive } from '../utils/idle.js';
 import { checkAlerts, resetDailyAlerts } from '../utils/alerts.js';
 import { syncToFirestore } from '../utils/sync.js';
 import { updateBlockRules, clearBlockRules } from '../utils/blocker.js';
+import { generateInsight } from '../utils/ai.js';
 
 // ── Constants ────────────────────────────────────────────────────────
 const ALARM_HEARTBEAT = 'focusflow_heartbeat';
@@ -194,6 +195,13 @@ async function handleMessage(message, sender) {
       await handleSync();
       return { ok: true };
 
+    case 'UPDATE_CATEGORY':
+      await updateDomainCategory(message.domain, message.category);
+      return { ok: true };
+
+    case 'GET_AI_INSIGHT':
+      return await generateInsight();
+
     // ── Pomodoro Messages ──────────────────────────────────────────────
     case 'START_POMODORO':
       return await startPomodoro();
@@ -301,6 +309,8 @@ async function handleDailyReset() {
   if (today !== lastDateKey) {
     lastDateKey = today;
     resetDailyAlerts();
+    await saveAutoBlockedDomains([]); // clear auto blocks
+    await applyAllBlockRules();
     await updateStreaks();
     await cleanupOldData();
     console.log('FocusFlow: New day detected, data reset');
@@ -355,6 +365,17 @@ async function calculateProductivityScore() {
 // ── Focus Mode ───────────────────────────────────────────────────────
 
 /**
+ * Applies both Focus Mode blocks and Auto Blocked limits.
+ */
+async function applyAllBlockRules() {
+  const focusMode = await getFocusMode();
+  const autoBlocked = await getAutoBlockedDomains();
+  
+  const combined = new Set([...(focusMode.active ? focusMode.blockedDomains : []), ...autoBlocked]);
+  await updateBlockRules(Array.from(combined));
+}
+
+/**
  * Toggle focus mode on/off
  */
 async function toggleFocusMode(domains = [], duration = 25) {
@@ -362,15 +383,15 @@ async function toggleFocusMode(domains = [], duration = 25) {
 
   if (focusMode.active) {
     // Turn off
-    await clearBlockRules();
     await saveFocusMode({ active: false, blockedDomains: [], endTime: null, duration: 0 });
+    await applyAllBlockRules();
     chrome.alarms.clear(ALARM_FOCUS_END);
     return { active: false };
   } else {
     // Turn on
     const endTime = Date.now() + (duration * 60 * 1000);
-    await updateBlockRules(domains);
     await saveFocusMode({ active: true, blockedDomains: domains, endTime, duration });
+    await applyAllBlockRules();
     chrome.alarms.create(ALARM_FOCUS_END, { when: endTime });
     return { active: true, endTime };
   }
@@ -380,8 +401,8 @@ async function toggleFocusMode(domains = [], duration = 25) {
  * Handle focus mode timer end
  */
 async function handleFocusEnd() {
-  await clearBlockRules();
   await saveFocusMode({ active: false, blockedDomains: [], endTime: null, duration: 0 });
+  await applyAllBlockRules();
 
   chrome.notifications.create('focusflow_focus_end', {
     type: 'basic',
@@ -401,11 +422,13 @@ async function checkFocusMode() {
     if (focusMode.endTime && Date.now() >= focusMode.endTime) {
       await handleFocusEnd();
     } else {
-      await updateBlockRules(focusMode.blockedDomains);
+      await applyAllBlockRules();
       if (focusMode.endTime) {
         chrome.alarms.create(ALARM_FOCUS_END, { when: focusMode.endTime });
       }
     }
+  } else {
+    await applyAllBlockRules();
   }
 }
 

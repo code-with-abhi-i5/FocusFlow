@@ -30,7 +30,9 @@ const STORAGE_KEYS = {
   STREAKS: 'streaks',
   LAST_SYNC: 'lastSync',
   USER: 'user',
-  POMODORO: 'pomodoro'
+  POMODORO: 'pomodoro',
+  SITE_LIMITS: 'siteLimits',
+  AUTO_BLOCKED: 'autoBlocked'
 };
 
 /**
@@ -117,6 +119,36 @@ export async function updateDomainTime(domain, additionalSeconds, category = 'ne
   });
 
   return dayData[domain];
+}
+
+/**
+ * Update the category of a domain retroactively for today and permanently
+ */
+export async function updateDomainCategory(domain, category) {
+  // Update permanent custom categories
+  const result = await chrome.storage.local.get(STORAGE_KEYS.CATEGORIES);
+  const categories = result[STORAGE_KEYS.CATEGORIES] || { productive: [], unproductive: [], neutral: [] };
+  
+  // Remove from existing categories
+  ['productive', 'unproductive', 'neutral'].forEach(cat => {
+    categories[cat] = categories[cat].filter(d => d !== domain);
+  });
+  
+  // Add to new category
+  if (category !== 'neutral') {
+    if (!categories[category]) categories[category] = [];
+    categories[category].push(domain);
+  }
+  await chrome.storage.local.set({ [STORAGE_KEYS.CATEGORIES]: categories });
+
+  // Retroactively update today's tracking data
+  const dateKey = getTodayKey();
+  const dayData = await getTimeData(dateKey);
+  
+  if (dayData[domain]) {
+    dayData[domain].category = category;
+    await saveTimeData(dateKey, dayData);
+  }
 }
 
 /**
@@ -304,6 +336,26 @@ export async function getUser() {
 
 export async function saveUser(user) {
   await chrome.storage.local.set({ [STORAGE_KEYS.USER]: user });
+}
+
+// ── Site Limits ──────────────────────────────────────────────────────
+
+export async function getSiteLimits() {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.SITE_LIMITS);
+  return result[STORAGE_KEYS.SITE_LIMITS] || {};
+}
+
+export async function saveSiteLimits(limits) {
+  await chrome.storage.local.set({ [STORAGE_KEYS.SITE_LIMITS]: limits });
+}
+
+export async function getAutoBlockedDomains() {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.AUTO_BLOCKED);
+  return result[STORAGE_KEYS.AUTO_BLOCKED] || [];
+}
+
+export async function saveAutoBlockedDomains(domains) {
+  await chrome.storage.local.set({ [STORAGE_KEYS.AUTO_BLOCKED]: domains });
 }
 
 // ── Pomodoro State ────────────────────────────────────────────────────

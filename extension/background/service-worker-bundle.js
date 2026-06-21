@@ -222,9 +222,12 @@ const STORAGE_KEYS = {
   SETTINGS: 'settings',
   FOCUS_MODE: 'focusMode',
   PENDING_SYNC: 'pendingSync',
+  CATEGORIES: 'categories',
   GOALS: 'goals',
   STREAKS: 'streaks',
-  POMODORO: 'pomodoro'
+  POMODORO: 'pomodoro',
+  SITE_LIMITS: 'siteLimits',
+  AUTO_BLOCKED: 'autoBlocked'
 };
 
 /**
@@ -311,6 +314,36 @@ async function updateDomainTime(domain, additionalSeconds, category = 'neutral')
   });
 
   return dayData[domain];
+}
+
+/**
+ * Update the category of a domain retroactively for today and permanently
+ */
+async function updateDomainCategory(domain, category) {
+  // Update permanent custom categories
+  const result = await chrome.storage.local.get(STORAGE_KEYS.CATEGORIES);
+  const categories = result[STORAGE_KEYS.CATEGORIES] || { productive: [], unproductive: [], neutral: [] };
+  
+  // Remove from existing categories
+  ['productive', 'unproductive', 'neutral'].forEach(cat => {
+    categories[cat] = categories[cat].filter(d => d !== domain);
+  });
+  
+  // Add to new category
+  if (category !== 'neutral') {
+    if (!categories[category]) categories[category] = [];
+    categories[category].push(domain);
+  }
+  await chrome.storage.local.set({ [STORAGE_KEYS.CATEGORIES]: categories });
+
+  // Retroactively update today's tracking data
+  const dateKey = getTodayKey();
+  const dayData = await getTimeData(dateKey);
+  
+  if (dayData[domain]) {
+    dayData[domain].category = category;
+    await saveTimeData(dateKey, dayData);
+  }
 }
 
 /**
@@ -438,6 +471,22 @@ async function saveStreaks(streaks) {
   await chrome.storage.local.set({ [STORAGE_KEYS.STREAKS]: streaks });
 }
 
+// ── Site Limits ──────────────────────────────────────────────────────
+
+async function getSiteLimits() {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.SITE_LIMITS);
+  return result[STORAGE_KEYS.SITE_LIMITS] || {};
+}
+
+async function getAutoBlockedDomains() {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.AUTO_BLOCKED);
+  return result[STORAGE_KEYS.AUTO_BLOCKED] || [];
+}
+
+async function saveAutoBlockedDomains(domains) {
+  await chrome.storage.local.set({ [STORAGE_KEYS.AUTO_BLOCKED]: domains });
+}
+
 // ── Pomodoro State ────────────────────────────────────────────────────
 
 /**
@@ -492,22 +541,26 @@ var storage = /*#__PURE__*/Object.freeze({
   addToPendingSync: addToPendingSync,
   cleanupOldData: cleanupOldData,
   getAllTimeData: getAllTimeData,
+  getAutoBlockedDomains: getAutoBlockedDomains,
   getDateKey: getDateKey,
   getFocusMode: getFocusMode,
   getGoals: getGoals,
   getPomodoroState: getPomodoroState,
   getSettings: getSettings,
+  getSiteLimits: getSiteLimits,
   getStreaks: getStreaks,
   getTimeData: getTimeData,
   getTodayData: getTodayData,
   getTodayKey: getTodayKey,
   getTodayTotalTime: getTodayTotalTime,
   getTopDomainsToday: getTopDomainsToday,
+  saveAutoBlockedDomains: saveAutoBlockedDomains,
   saveFocusMode: saveFocusMode,
   savePomodoroState: savePomodoroState,
   saveStreaks: saveStreaks,
   saveTimeData: saveTimeData,
   startSession: startSession,
+  updateDomainCategory: updateDomainCategory,
   updateDomainTime: updateDomainTime
 });
 
@@ -712,6 +765,82 @@ function isUserActive() {
 }
 
 /**
+ * FocusFlow — Website Blocker (Focus Mode)
+ * Uses chrome.declarativeNetRequest to redirect blocked domains to a custom block page.
+ *
+ * Fix: IDs start at 10000 to avoid collisions with any static rulesets.
+ * Fix: remove + add happen in a SINGLE atomic updateDynamicRules call to prevent
+ *      "Rule with id X does not have a unique ID" errors.
+ */
+
+const RULE_ID_BASE = 10000; // High base to avoid collisions with static rules
+
+/**
+ * Update declarativeNetRequest rules to block specified domains.
+ * Atomically removes existing rules and adds new ones in one call.
+ * @param {string[]} domains — list of domains to block
+ */
+async function updateBlockRules(domains) {
+  if (!domains || domains.length === 0) {
+    await clearBlockRules();
+    return;
+  }
+
+  // Get existing dynamic rule IDs so we can remove them atomically
+  let existingRuleIds = [];
+  try {
+    const existing = await chrome.declarativeNetRequest.getDynamicRules();
+    existingRuleIds = existing.map(r => r.id);
+  } catch (_) {}
+
+  // Build new rules with high, unique IDs
+  const rules = domains.map((domain, index) => ({
+    id: RULE_ID_BASE + index,
+    priority: 1,
+    action: {
+      type: 'redirect',
+      redirect: {
+        extensionPath: '/blocked/blocked.html'
+      }
+    },
+    condition: {
+      urlFilter: `||${domain}`,
+      resourceTypes: ['main_frame']
+    }
+  }));
+
+  try {
+    // Single atomic call: remove old + add new simultaneously
+    await chrome.declarativeNetRequest.updateDynamicRules({
+      removeRuleIds: existingRuleIds,
+      addRules: rules
+    });
+    console.log(`FocusFlow: Blocked ${domains.length} domains`);
+  } catch (error) {
+    console.error('FocusFlow: Failed to update block rules', error);
+  }
+}
+
+/**
+ * Clear all dynamic blocking rules
+ */
+async function clearBlockRules() {
+  try {
+    const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
+    const ruleIds = existingRules.map(rule => rule.id);
+
+    if (ruleIds.length > 0) {
+      await chrome.declarativeNetRequest.updateDynamicRules({
+        removeRuleIds: ruleIds,
+        addRules: []
+      });
+    }
+  } catch (error) {
+    console.error('FocusFlow: Failed to clear block rules', error);
+  }
+}
+
+/**
  * FocusFlow — Productivity Alerts
  * Chrome notifications for productivity insights, limit warnings, streak
  * milestones, and motivational reminders.
@@ -772,26 +901,41 @@ async function checkAlerts(streaks) {
  */
 async function checkSiteLimits() {
   const dayData = await getTodayData();
-  const thresholds = [30, 45, 60, 90, 120]; // minutes
+  const limits = await getSiteLimits();
+  const autoBlocked = await getAutoBlockedDomains();
+  let updatedAutoBlocked = false;
 
-  for (const [domain, data] of Object.entries(dayData)) {
-    const category = classifyDomain(domain);
-    if (category !== 'unproductive') continue;
+  for (const [domain, limitMins] of Object.entries(limits)) {
+    const data = dayData[domain];
+    if (!data) continue;
 
     const minutesSpent = Math.floor(data.timeSpent / 60);
+    if (minutesSpent >= limitMins && !autoBlocked.includes(domain)) {
+      autoBlocked.push(domain);
+      updatedAutoBlocked = true;
 
-    for (const threshold of thresholds) {
-      const alertKey = `site_${domain}_${threshold}`;
-      if (minutesSpent >= threshold && !alertsShown.has(alertKey)) {
-        alertsShown.add(alertKey);
-        showNotification(
-          '⏰ Time Check',
-          `You've spent ${formatTime(data.timeSpent)} on ${domain} today.`,
-          'time_warning'
-        );
-        break; // Only show the highest unshown threshold
-      }
+      showNotification(
+        '🛑 Site Limit Exceeded',
+        `You've reached your ${limitMins}m limit for ${domain}. It has been blocked for the rest of the day.`,
+        `limit_block_${domain}`
+      );
+    } else if (minutesSpent >= limitMins * 0.8 && !alertsShown.has(`limit_warn_${domain}`)) {
+      // 80% warning
+      alertsShown.add(`limit_warn_${domain}`);
+      showNotification(
+        '⚠️ Limit Approaching',
+        `You have used 80% of your daily limit for ${domain}.`,
+        `limit_warn_${domain}`
+      );
     }
+  }
+
+  if (updatedAutoBlocked) {
+    await saveAutoBlockedDomains(autoBlocked);
+    // Apply rules
+    const focusMode = await getFocusMode();
+    const combined = new Set([...(focusMode.active ? focusMode.blockedDomains : []), ...autoBlocked]);
+    await updateBlockRules(Array.from(combined));
   }
 }
 
@@ -32427,78 +32571,90 @@ async function syncStreaksToFirestore(uid) {
 }
 
 /**
- * FocusFlow — Website Blocker (Focus Mode)
- * Uses chrome.declarativeNetRequest to redirect blocked domains to a custom block page.
- *
- * Fix: IDs start at 10000 to avoid collisions with any static rulesets.
- * Fix: remove + add happen in a SINGLE atomic updateDynamicRules call to prevent
- *      "Rule with id X does not have a unique ID" errors.
+ * FocusFlow — AI Insights (Gemini)
+ * Generates productivity tips based on tracking data using Gemini Flash.
  */
 
-const RULE_ID_BASE = 10000; // High base to avoid collisions with static rules
+
+// Cache to avoid hitting API too often (cache for 1 hour)
+let cachedInsight = null;
+let lastFetchTime = 0;
+const CACHE_DURATION_MS = 60 * 60 * 1000;
 
 /**
- * Update declarativeNetRequest rules to block specified domains.
- * Atomically removes existing rules and adds new ones in one call.
- * @param {string[]} domains — list of domains to block
+ * Generate a short AI productivity insight using the Gemini API.
+ * Uses the user's API key from settings.
  */
-async function updateBlockRules(domains) {
-  if (!domains || domains.length === 0) {
-    await clearBlockRules();
-    return;
-  }
-
-  // Get existing dynamic rule IDs so we can remove them atomically
-  let existingRuleIds = [];
+async function generateInsight() {
   try {
-    const existing = await chrome.declarativeNetRequest.getDynamicRules();
-    existingRuleIds = existing.map(r => r.id);
-  } catch (_) {}
-
-  // Build new rules with high, unique IDs
-  const rules = domains.map((domain, index) => ({
-    id: RULE_ID_BASE + index,
-    priority: 1,
-    action: {
-      type: 'redirect',
-      redirect: {
-        extensionPath: '/blocked/blocked.html'
-      }
-    },
-    condition: {
-      urlFilter: `||${domain}`,
-      resourceTypes: ['main_frame']
+    // Return cached insight if valid
+    if (cachedInsight && Date.now() - lastFetchTime < CACHE_DURATION_MS) {
+      return { insight: cachedInsight };
     }
-  }));
 
-  try {
-    // Single atomic call: remove old + add new simultaneously
-    await chrome.declarativeNetRequest.updateDynamicRules({
-      removeRuleIds: existingRuleIds,
-      addRules: rules
+    const settings = await getSettings();
+    if (!settings.geminiApiKey) {
+      return { error: 'Please set your Gemini API key in Options.' };
+    }
+
+    // Gather context data for the prompt
+    const topDomains = await getTopDomainsToday(5);
+    const dayData = await getTodayData();
+    
+    // Check if we have enough data
+    if (!topDomains || topDomains.length === 0) {
+      return { insight: "Start working to get personalized AI insights! 🌱" };
+    }
+
+    // Format data for the prompt
+    let dataContext = "Today's usage:\n";
+    topDomains.forEach(d => {
+      const category = dayData[d.domain]?.category || 'neutral';
+      dataContext += `- ${d.domain} (${category}): ${formatTime(d.timeSpent)}\n`;
     });
-    console.log(`FocusFlow: Blocked ${domains.length} domains`);
-  } catch (error) {
-    console.error('FocusFlow: Failed to update block rules', error);
-  }
-}
 
-/**
- * Clear all dynamic blocking rules
- */
-async function clearBlockRules() {
-  try {
-    const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
-    const ruleIds = existingRules.map(rule => rule.id);
+    const prompt = `
+You are a top-tier productivity coach named FocusFlow AI.
+Analyze the user's web usage data and give ONE short, punchy, actionable tip (max 30 words).
+Use a friendly, motivating tone with emojis. Don't be generic. If they spent a lot of time on unproductive sites, gently encourage Focus Mode. If they were productive, praise them.
+If they just started, encourage them to keep going.
 
-    if (ruleIds.length > 0) {
-      await chrome.declarativeNetRequest.updateDynamicRules({
-        removeRuleIds: ruleIds,
-        addRules: []
-      });
+Data:
+${dataContext}
+`;
+
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${settings.geminiApiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 60,
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error('Gemini API Error:', errText);
+      return { error: 'API Error. Please check your Gemini API key.' };
     }
-  } catch (error) {
-    console.error('FocusFlow: Failed to clear block rules', error);
+
+    const data = await response.json();
+    const insightText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (insightText) {
+      cachedInsight = insightText.trim();
+      lastFetchTime = Date.now();
+      return { insight: cachedInsight };
+    } else {
+      return { error: 'Failed to parse AI response.' };
+    }
+
+  } catch (err) {
+    console.error('FocusFlow AI Error:', err);
+    return { error: 'Failed to connect to AI service.' };
   }
 }
 
@@ -32691,6 +32847,13 @@ async function handleMessage(message, sender) {
       await handleSync();
       return { ok: true };
 
+    case 'UPDATE_CATEGORY':
+      await updateDomainCategory(message.domain, message.category);
+      return { ok: true };
+
+    case 'GET_AI_INSIGHT':
+      return await generateInsight();
+
     // ── Pomodoro Messages ──────────────────────────────────────────────
     case 'START_POMODORO':
       return await startPomodoro();
@@ -32798,6 +32961,8 @@ async function handleDailyReset() {
   if (today !== lastDateKey) {
     lastDateKey = today;
     resetDailyAlerts();
+    await saveAutoBlockedDomains([]); // clear auto blocks
+    await applyAllBlockRules();
     await updateStreaks();
     await cleanupOldData();
     console.log('FocusFlow: New day detected, data reset');
@@ -32852,6 +33017,17 @@ async function calculateProductivityScore() {
 // ── Focus Mode ───────────────────────────────────────────────────────
 
 /**
+ * Applies both Focus Mode blocks and Auto Blocked limits.
+ */
+async function applyAllBlockRules() {
+  const focusMode = await getFocusMode();
+  const autoBlocked = await getAutoBlockedDomains();
+  
+  const combined = new Set([...(focusMode.active ? focusMode.blockedDomains : []), ...autoBlocked]);
+  await updateBlockRules(Array.from(combined));
+}
+
+/**
  * Toggle focus mode on/off
  */
 async function toggleFocusMode(domains = [], duration = 25) {
@@ -32859,15 +33035,15 @@ async function toggleFocusMode(domains = [], duration = 25) {
 
   if (focusMode.active) {
     // Turn off
-    await clearBlockRules();
     await saveFocusMode({ active: false, blockedDomains: [], endTime: null, duration: 0 });
+    await applyAllBlockRules();
     chrome.alarms.clear(ALARM_FOCUS_END);
     return { active: false };
   } else {
     // Turn on
     const endTime = Date.now() + (duration * 60 * 1000);
-    await updateBlockRules(domains);
     await saveFocusMode({ active: true, blockedDomains: domains, endTime, duration });
+    await applyAllBlockRules();
     chrome.alarms.create(ALARM_FOCUS_END, { when: endTime });
     return { active: true, endTime };
   }
@@ -32877,8 +33053,8 @@ async function toggleFocusMode(domains = [], duration = 25) {
  * Handle focus mode timer end
  */
 async function handleFocusEnd() {
-  await clearBlockRules();
   await saveFocusMode({ active: false, blockedDomains: [], endTime: null, duration: 0 });
+  await applyAllBlockRules();
 
   chrome.notifications.create('focusflow_focus_end', {
     type: 'basic',
@@ -32898,11 +33074,13 @@ async function checkFocusMode() {
     if (focusMode.endTime && Date.now() >= focusMode.endTime) {
       await handleFocusEnd();
     } else {
-      await updateBlockRules(focusMode.blockedDomains);
+      await applyAllBlockRules();
       if (focusMode.endTime) {
         chrome.alarms.create(ALARM_FOCUS_END, { when: focusMode.endTime });
       }
     }
+  } else {
+    await applyAllBlockRules();
   }
 }
 

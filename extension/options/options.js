@@ -5,14 +5,16 @@
 
 let customCategories = { productive: [], unproductive: [], neutral: [] };
 let blocklistDomains = [];
+let siteLimits = {};
 
 // ── Load Settings ────────────────────────────────────────────────────
 
 async function loadSettings() {
-  const result = await chrome.storage.local.get(['settings', 'goals', 'categories', 'focusMode']);
+  const result = await chrome.storage.local.get(['settings', 'goals', 'categories', 'focusMode', 'siteLimits']);
 
   const settings = result.settings || {};
   document.getElementById('syncKeyInput').value = settings.syncKey || '';
+  document.getElementById('geminiApiKey').value = settings.geminiApiKey || '';
   document.getElementById('notificationsEnabled').checked = settings.notificationsEnabled !== false;
   document.getElementById('idleTimeout').value = settings.idleTimeout || 60;
   document.getElementById('themeSelect').value = settings.theme || 'dark';
@@ -31,6 +33,10 @@ async function loadSettings() {
   const focusMode = result.focusMode || {};
   blocklistDomains = focusMode.blockedDomains || ['youtube.com', 'instagram.com', 'facebook.com', 'x.com', 'reddit.com'];
   renderBlocklistTags();
+
+  // Site Limits
+  siteLimits = result.siteLimits || {};
+  renderSiteLimits();
 }
 
 // ── Render Tags ──────────────────────────────────────────────────────
@@ -63,6 +69,25 @@ function renderBlocklistTags() {
 
   if (blocklistDomains.length === 0) {
     container.innerHTML = '<span style="font-size:12px;color:var(--text-muted);">No domains in blocklist</span>';
+  }
+}
+
+function renderSiteLimits() {
+  const container = document.getElementById('siteLimitsList');
+  const domains = Object.keys(siteLimits);
+
+  container.innerHTML = domains.map(domain => `
+    <div class="domain-tag" style="justify-content: space-between; padding: 8px 12px; font-size: 13px;">
+      <span style="font-weight:600; color:var(--text-primary)">${domain}</span>
+      <div style="display:flex; align-items:center; gap: 12px;">
+        <span style="color:var(--accent-primary)">${siteLimits[domain]} mins</span>
+        <button class="remove-btn" onclick="removeSiteLimit('${domain}')">&times;</button>
+      </div>
+    </div>
+  `).join('');
+
+  if (domains.length === 0) {
+    container.innerHTML = '<span style="font-size:12px;color:var(--text-muted);">No per-site limits set</span>';
   }
 }
 
@@ -114,6 +139,30 @@ function removeBlockDomain(domain) {
   renderBlocklistTags();
 }
 
+function addSiteLimit() {
+  const input = document.getElementById('addLimitDomain');
+  const minInput = document.getElementById('addLimitMins');
+  const domain = input.value.trim().toLowerCase();
+  const mins = parseInt(minInput.value);
+
+  if (!domain || !domain.includes('.') || isNaN(mins) || mins < 1) return;
+
+  siteLimits[domain] = mins;
+  input.value = '';
+  minInput.value = '';
+  renderSiteLimits();
+}
+
+function removeSiteLimit(domain) {
+  delete siteLimits[domain];
+  renderSiteLimits();
+}
+
+// Export for global onclick handlers
+window.removeDomain = removeDomain;
+window.removeBlockDomain = removeBlockDomain;
+window.removeSiteLimit = removeSiteLimit;
+
 function capitalize(str) {
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
@@ -123,6 +172,7 @@ function capitalize(str) {
 async function saveAll() {
   const settings = {
     syncKey: document.getElementById('syncKeyInput').value.trim(),
+    geminiApiKey: document.getElementById('geminiApiKey').value.trim(),
     notificationsEnabled: document.getElementById('notificationsEnabled').checked,
     idleTimeout: parseInt(document.getElementById('idleTimeout').value) || 60,
     theme: document.getElementById('themeSelect').value
@@ -136,7 +186,8 @@ async function saveAll() {
   await chrome.storage.local.set({
     settings,
     goals,
-    categories: customCategories
+    categories: customCategories,
+    siteLimits: siteLimits
   });
 
   // Force sync immediately so the dashboard updates
@@ -176,5 +227,6 @@ document.getElementById('saveBtn').addEventListener('click', saveAll);
 document.getElementById('addProductiveBtn').addEventListener('click', () => addDomain('productive'));
 document.getElementById('addUnproductiveBtn').addEventListener('click', () => addDomain('unproductive'));
 document.getElementById('addBlockBtn').addEventListener('click', addBlockDomain);
+document.getElementById('addLimitBtn').addEventListener('click', addSiteLimit);
 
 loadSettings();
