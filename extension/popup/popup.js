@@ -62,7 +62,7 @@ themeToggleEl.addEventListener('click', async () => {
 
 openDashboardEl.addEventListener('click', () => {
   // Open the dashboard (when served locally or deployed)
-  chrome.tabs.create({ url: 'http://localhost:5173' });
+  chrome.tabs.create({ url: 'https://focus-flow-two-orpin.vercel.app/' });
 });
 
 openOptionsEl.addEventListener('click', () => {
