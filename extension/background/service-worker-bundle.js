@@ -32692,6 +32692,7 @@ const POMO_LONG_BREAK_SECONDS = 15 * 60;
 let currentDomain = null;
 let windowFocused = true;
 let lastDateKey = getTodayKey();
+let tempUnblockedDomains = {}; // { 'domain.com': expirationTimestampMs }
 
 // ── Initialization ───────────────────────────────────────────────────
 
@@ -32859,6 +32860,22 @@ async function handleMessage(message, sender) {
 
     case 'GET_AI_INSIGHT':
       return await generateInsight();
+
+    case 'TEMP_UNBLOCK':
+      const { domain, duration } = message;
+      if (domain) {
+        tempUnblockedDomains[domain] = Date.now() + (duration * 60 * 1000);
+        await applyAllBlockRules();
+        
+        // Remove the bypass after the duration
+        setTimeout(async () => {
+          if (tempUnblockedDomains[domain] && Date.now() >= tempUnblockedDomains[domain]) {
+            delete tempUnblockedDomains[domain];
+            await applyAllBlockRules();
+          }
+        }, duration * 60 * 1000);
+      }
+      return { ok: true };
 
     // ── Pomodoro Messages ──────────────────────────────────────────────
     case 'START_POMODORO':
@@ -33030,6 +33047,16 @@ async function applyAllBlockRules() {
   const autoBlocked = await getAutoBlockedDomains();
   
   const combined = new Set([...(focusMode.active ? focusMode.blockedDomains : []), ...autoBlocked]);
+  
+  // Exclude temporarily unblocked domains
+  for (const domain of Object.keys(tempUnblockedDomains)) {
+    if (Date.now() < tempUnblockedDomains[domain]) {
+      combined.delete(domain);
+    } else {
+      delete tempUnblockedDomains[domain]; // cleanup
+    }
+  }
+
   await updateBlockRules(Array.from(combined));
 }
 

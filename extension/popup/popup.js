@@ -72,6 +72,19 @@ const aiBtn = document.getElementById('aiBtn');
 const aiCard = document.getElementById('aiCard');
 const aiText = document.getElementById('aiText');
 
+// Tabs
+const tabBtns = document.querySelectorAll('.tab-btn');
+const tabContents = document.querySelectorAll('.tab-content');
+
+// Stats Elements
+const pbStreakEl = document.getElementById('pbStreak');
+const thisWeekTimeEl = document.getElementById('thisWeekTime');
+const lastWeekTimeEl = document.getElementById('lastWeekTime');
+const thisWeekBarEl = document.getElementById('thisWeekBar');
+const lastWeekBarEl = document.getElementById('lastWeekBar');
+const bestDayNameEl = document.getElementById('bestDayName');
+const bestDayTimeEl = document.getElementById('bestDayTime');
+
 // ── Theme ────────────────────────────────────────────────────────────
 
 async function initTheme() {
@@ -390,6 +403,89 @@ aiBtn.addEventListener('click', async () => {
     aiCard.classList.add('visible');
   }
 });
+
+// ── Tabs & Leaderboard ───────────────────────────────────────────────
+
+tabBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    tabBtns.forEach(b => b.classList.remove('active'));
+    tabContents.forEach(c => c.classList.remove('active'));
+    
+    btn.classList.add('active');
+    document.getElementById(btn.dataset.tab).classList.add('active');
+    
+    if (btn.dataset.tab === 'tabStats') {
+      loadWeeklyStats();
+    }
+  });
+});
+
+async function loadWeeklyStats() {
+  try {
+    const result = await chrome.storage.local.get(['timeData', 'streaks']);
+    const timeData = result.timeData || {};
+    const streaks = result.streaks || { bestStreak: 0 };
+    
+    // Personal Best
+    pbStreakEl.textContent = `${streaks.bestStreak || 0} Day Streak`;
+    
+    const now = new Date();
+    now.setHours(0,0,0,0);
+    
+    let thisWeekTotal = 0;
+    let lastWeekTotal = 0;
+    let bestDayTime = 0;
+    let bestDayDate = null;
+    
+    // Calculate last 14 days
+    for (let i = 0; i < 14; i++) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const dateKey = d.toISOString().split('T')[0];
+      
+      const dayData = timeData[dateKey] || {};
+      let dayProdTime = 0;
+      
+      for (const [domain, data] of Object.entries(dayData)) {
+        if (data.category === 'productive') {
+          dayProdTime += data.timeSpent;
+        }
+      }
+      
+      if (i < 7) {
+        thisWeekTotal += dayProdTime;
+        if (dayProdTime > bestDayTime) {
+          bestDayTime = dayProdTime;
+          bestDayDate = d;
+        }
+      } else {
+        lastWeekTotal += dayProdTime;
+      }
+    }
+    
+    thisWeekTimeEl.textContent = formatTime(thisWeekTotal);
+    lastWeekTimeEl.textContent = formatTime(lastWeekTotal);
+    
+    if (bestDayDate && bestDayTime > 0) {
+      const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      bestDayNameEl.textContent = bestDayDate.toDateString() === now.toDateString() ? 'Today' : days[bestDayDate.getDay()];
+      bestDayTimeEl.textContent = formatTime(bestDayTime);
+    } else {
+      bestDayNameEl.textContent = '--';
+      bestDayTimeEl.textContent = '0h';
+    }
+    
+    // Animate bars
+    const maxWeek = Math.max(thisWeekTotal, lastWeekTotal, 1);
+    setTimeout(() => {
+      thisWeekBarEl.style.width = `${(thisWeekTotal / maxWeek) * 100}%`;
+      lastWeekBarEl.style.width = `${(lastWeekTotal / maxWeek) * 100}%`;
+    }, 50);
+    
+  } catch (err) {
+    console.error('Failed to load stats:', err);
+  }
+}
 
 // ── Auto-Refresh ─────────────────────────────────────────────────────
 

@@ -16,6 +16,7 @@ import { useStreaks } from '../hooks/useStreaks';
 import { StatCard } from '../components/ui/StatCard';
 import { ProductivityScore } from '../components/ui/ProductivityScore';
 import { GoalCard } from '../components/ui/GoalCard';
+import { HeatmapSection } from '../components/ui/HeatmapSection';
 import { generateInsights } from '../services/aiCoach';
 import { StatCardSkeleton, TableSkeleton } from '../components/ui/LoadingSkeleton';
 
@@ -143,6 +144,9 @@ export const DashboardPage: React.FC = () => {
           iconBgClass="bg-indigo-500/10 dark:bg-indigo-500/10"
         />
       </div>
+
+      {/* Year Heatmap */}
+      <HeatmapSection />
 
       {/* Main Grid split */}
       <div className="grid gap-6 lg:grid-cols-12">

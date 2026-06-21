@@ -44,7 +44,14 @@
       </div>
     </header>
 
-    <!-- Productivity Score Ring -->
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="tabToday">Today</button>
+      <button class="tab-btn" data-tab="tabStats">Stats</button>
+    </div>
+
+    <div class="tab-content active" id="tabToday">
+      <!-- Productivity Score Ring -->
     <section class="score-section">
       <div class="score-ring-container">
         <svg class="score-ring" viewBox="0 0 120 120">
@@ -177,6 +184,47 @@
       </button>
       <div class="ai-card" id="aiCard">
         <div class="ai-text" id="aiText"></div>
+      </div>
+    </div>
+
+    </div> <!-- End tabToday -->
+
+    <div class="tab-content" id="tabStats">
+      <h2 class="section-title" style="margin-top: 8px;">Weekly Leaderboard</h2>
+      
+      <!-- Personal Best -->
+      <div class="personal-best-card">
+        <div class="pb-icon">🏆</div>
+        <div class="pb-info">
+          <div class="pb-label">Personal Best</div>
+          <div class="pb-value" id="pbStreak">0 Day Streak</div>
+        </div>
+      </div>
+
+      <!-- This Week vs Last Week -->
+      <div class="weekly-comparison">
+        <div class="comparison-header">
+          <span>This Week</span>
+          <span class="comparison-value" id="thisWeekTime">0h</span>
+        </div>
+        <div class="comparison-bar-container">
+          <div class="comparison-bar current" id="thisWeekBar" style="width: 0%"></div>
+        </div>
+        
+        <div class="comparison-header" style="margin-top: 12px;">
+          <span>Last Week</span>
+          <span class="comparison-value" id="lastWeekTime">0h</span>
+        </div>
+        <div class="comparison-bar-container">
+          <div class="comparison-bar previous" id="lastWeekBar" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Best Day -->
+      <div class="best-day-card">
+        <div class="bd-label">Best Day This Week</div>
+        <div class="bd-value" id="bestDayName">--</div>
+        <div class="bd-time" id="bestDayTime">0h</div>
       </div>
     </div>
 

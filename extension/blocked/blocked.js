@@ -21,6 +21,96 @@ const QUOTES = [
 // ── Timer ────────────────────────────────────────────────────────────
 
 const timerDisplay = document.getElementById('timerDisplay');
+const statProductive = document.getElementById('statProductive');
+const statScore = document.getElementById('statScore');
+const statsRow = document.getElementById('statsRow');
+const bypassBtn = document.getElementById('bypassBtn');
+const bypassCountSpan = document.getElementById('bypassCount');
+
+// Bypass State
+let bypassesUsed = 0;
+const MAX_BYPASSES = 3;
+
+function formatTime(seconds) {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+// Get today's YYYY-MM-DD
+function getTodayKey() {
+  const now = new Date();
+  return now.toISOString().split('T')[0];
+}
+
+async function updateStats() {
+  try {
+    const today = getTodayKey();
+    const result = await chrome.storage.local.get(['timeData', 'bypassState']);
+    const dayData = result.timeData?.[today] || {};
+    
+    // Setup Bypass State
+    const bypassState = result.bypassState || { date: today, used: 0 };
+    if (bypassState.date !== today) {
+      bypassState.date = today;
+      bypassState.used = 0;
+    }
+    bypassesUsed = bypassState.used;
+    updateBypassUI();
+    
+    let prodSec = 0;
+    let unprodSec = 0;
+    
+    for (const [domain, data] of Object.entries(dayData)) {
+      if (data.category === 'productive') prodSec += data.timeSpent;
+      if (data.category === 'unproductive') unprodSec += data.timeSpent;
+    }
+    
+    const totalSec = prodSec + unprodSec;
+    const score = totalSec > 0 ? Math.round((prodSec / totalSec) * 100) : 0;
+    
+    statProductive.textContent = formatTime(prodSec);
+    statScore.textContent = `${score}%`;
+    statsRow.style.display = 'flex';
+  } catch (err) {
+    console.error('Failed to load stats:', err);
+  }
+}
+
+function updateBypassUI() {
+  const remaining = MAX_BYPASSES - bypassesUsed;
+  bypassCountSpan.textContent = remaining;
+  if (remaining <= 0) {
+    bypassBtn.disabled = true;
+    bypassBtn.innerHTML = `No bypasses left today`;
+  }
+}
+
+bypassBtn.addEventListener('click', async () => {
+  if (bypassesUsed >= MAX_BYPASSES) return;
+  
+  bypassesUsed++;
+  const bypassState = { date: getTodayKey(), used: bypassesUsed };
+  await chrome.storage.local.set({ bypassState });
+  
+  // Extract domain from URL query params (if passed, e.g., ?domain=youtube.com)
+  const urlParams = new URLSearchParams(window.location.search);
+  const domain = urlParams.get('domain');
+  
+  await chrome.runtime.sendMessage({ 
+    type: 'TEMP_UNBLOCK', 
+    domain: domain,
+    duration: 5 
+  });
+  
+  // Go back to the unblocked page
+  if (window.history.length > 1) {
+    window.history.back();
+  } else {
+    window.location.href = `https://${domain || 'google.com'}`;
+  }
+});
 
 async function updateTimer() {
   try {
@@ -72,6 +162,7 @@ document.getElementById('goBackBtn').addEventListener('click', () => {
 // ── Initialize ───────────────────────────────────────────────────────
 
 showRandomQuote();
+updateStats();
 updateTimer();
 setInterval(updateTimer, 1000);
 
