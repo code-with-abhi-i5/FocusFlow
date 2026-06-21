@@ -371,7 +371,7 @@ aiBtn.addEventListener('click', async () => {
     aiBtn.classList.remove('loading');
     
     if (response?.error) {
-      if (response.error.includes('API key')) {
+      if (response.error === 'Please set your Gemini API key in Options.') {
         aiText.innerHTML = `Please add your Gemini API Key in the <a href="#" id="aiOpenOptions">Options</a> to enable insights.`;
         document.getElementById('aiOpenOptions')?.addEventListener('click', () => chrome.runtime.openOptionsPage());
       } else {
