@@ -32638,7 +32638,12 @@ ${dataContext}
     if (!response.ok) {
       const errText = await response.text();
       console.error('Gemini API Error:', errText);
-      return { error: 'API Error. Please check your Gemini API key.' };
+      try {
+        const errJson = JSON.parse(errText);
+        return { error: `API Error: ${errJson.error?.message || errText}` };
+      } catch (e) {
+        return { error: `API Error: ${errText}` };
+      }
     }
 
     const data = await response.json();
@@ -32654,7 +32659,7 @@ ${dataContext}
 
   } catch (err) {
     console.error('FocusFlow AI Error:', err);
-    return { error: 'Failed to connect to AI service.' };
+    return { error: `Failed to connect to AI: ${err.message || err}` };
   }
 }
 
