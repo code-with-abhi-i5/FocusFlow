@@ -93,3 +93,101 @@ ${dataContext}
     return { error: `Failed to connect to AI: ${err.message || err}` };
   }
 }
+
+/**
+ * Auto-categorize a domain using the Gemini API.
+ * Returns 'productive', 'unproductive', or 'neutral'.
+ */
+export async function autoCategorizeDomain(domain) {
+  try {
+    const settings = await getSettings();
+    if (!settings.geminiApiKey) return 'neutral';
+
+    const prompt = `Classify the website '${domain}' as either 'productive', 'unproductive', or 'neutral' for general work and study. Return ONLY one of the three words in lowercase.`;
+
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${settings.geminiApiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 10,
+        }
+      })
+    });
+
+    if (!response.ok) return 'neutral';
+
+    const data = await response.json();
+    const result = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim()?.toLowerCase();
+
+    if (result && ['productive', 'unproductive', 'neutral'].includes(result)) {
+      return result;
+    }
+    return 'neutral';
+  } catch (err) {
+    console.error('Auto-Categorize Error:', err);
+    return 'neutral';
+  }
+}
+
+/**
+ * Generate a weekly AI productivity report.
+ * Needs last 7 days data passed into it.
+ */
+export async function generateWeeklyReport(weeklyData) {
+  try {
+    const settings = await getSettings();
+    if (!settings.geminiApiKey) {
+      return { error: 'Please set your Gemini API key in Options.' };
+    }
+
+    if (!weeklyData || Object.keys(weeklyData).length === 0) {
+      return { report: "Start tracking to get your first Weekly AI Report! 🌱" };
+    }
+
+    // Format data for prompt
+    let dataContext = "Weekly Usage Summary (time spent per domain):\n";
+    for (const [domain, data] of Object.entries(weeklyData)) {
+      dataContext += `- ${domain} (${data.category}): ${formatTime(data.timeSpent)}\n`;
+    }
+
+    const prompt = `
+You are a top-tier productivity coach named FocusFlow AI.
+Analyze the user's weekly web usage data. Write a short, engaging 2-3 sentence summary report highlighting their most productive habits and where they might have wasted time. End with an encouraging tip for the next week. Keep it concise, friendly, and use emojis.
+
+Data:
+${dataContext}
+`;
+
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${settings.geminiApiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 150,
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      return { error: `API Error: ${errText}` };
+    }
+
+    const data = await response.json();
+    const reportText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (reportText) {
+      return { report: reportText.trim() };
+    } else {
+      return { error: 'Format Error from Gemini.' };
+    }
+  } catch (err) {
+    return { error: `Failed to connect to AI: ${err.message || err}` };
+  }
+}
+

@@ -84,6 +84,8 @@ const thisWeekBarEl = document.getElementById('thisWeekBar');
 const lastWeekBarEl = document.getElementById('lastWeekBar');
 const bestDayNameEl = document.getElementById('bestDayName');
 const bestDayTimeEl = document.getElementById('bestDayTime');
+const weeklyReportSection = document.getElementById('weeklyReportSection');
+const weeklyReportText = document.getElementById('weeklyReportText');
 
 // ── Theme ────────────────────────────────────────────────────────────
 
@@ -422,10 +424,18 @@ tabBtns.forEach(btn => {
 
 async function loadWeeklyStats() {
   try {
-    const result = await chrome.storage.local.get(['timeData', 'streaks']);
+    const result = await chrome.storage.local.get(['timeData', 'streaks', 'latestWeeklyReport']);
     const timeData = result.timeData || {};
     const streaks = result.streaks || { bestStreak: 0 };
     
+    // Weekly AI Report
+    if (result.latestWeeklyReport) {
+      weeklyReportSection.style.display = 'block';
+      weeklyReportText.innerHTML = result.latestWeeklyReport.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    } else {
+      weeklyReportSection.style.display = 'none';
+    }
+
     // Personal Best
     pbStreakEl.textContent = `${streaks.bestStreak || 0} Day Streak`;
     

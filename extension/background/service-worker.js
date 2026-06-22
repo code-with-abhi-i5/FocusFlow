@@ -269,9 +269,37 @@ async function handleTabChange(url) {
     const category = classifyDomain(domain);
     startTracking(domain);
     await startSession(domain, category);
+
+    // Auto-categorize new unknown domains
+    if (category === 'neutral') {
+      triggerAutoCategorization(domain);
+    }
   } else {
     currentDomain = null;
     stopTracking();
+  }
+}
+
+/**
+ * Triggers the AI to categorize a new neutral domain in the background.
+ */
+async function triggerAutoCategorization(domain) {
+  const settings = await getSettings();
+  if (!settings.geminiApiKey) return;
+
+  const result = await chrome.storage.local.get('aiCategorized');
+  const aiCategorized = result.aiCategorized || {};
+  if (aiCategorized[domain]) return; // Already checked
+
+  aiCategorized[domain] = true;
+  await chrome.storage.local.set({ aiCategorized });
+
+  const { autoCategorizeDomain } = await import('../utils/ai.js');
+  const newCategory = await autoCategorizeDomain(domain);
+  
+  if (newCategory === 'productive' || newCategory === 'unproductive') {
+    await updateDomainCategory(domain, newCategory);
+    console.log(`FocusFlow AI: Auto-categorized ${domain} as ${newCategory}`);
   }
 }
 
@@ -331,6 +359,51 @@ async function handleDailyReset() {
     await updateStreaks();
     await cleanupOldData();
     console.log('FocusFlow: New day detected, data reset');
+  }
+
+  // Check for Weekly AI Report (every Sunday)
+  const now = new Date();
+  if (now.getDay() === 0) { // 0 = Sunday
+    const settings = await getSettings();
+    if (settings.geminiApiKey) {
+      const result = await chrome.storage.local.get('lastWeeklyReportDate');
+      if (result.lastWeeklyReportDate !== today) {
+        const { generateWeeklyReport } = await import('../utils/ai.js');
+        const { getTimeData, getDateKey } = await import('../utils/storage.js');
+        
+        // Gather last 7 days of data
+        let weeklyData = {};
+        for (let i = 0; i < 7; i++) {
+          const d = new Date();
+          d.setDate(d.getDate() - i);
+          const dayKey = getDateKey(d);
+          const dayData = await getTimeData(dayKey);
+          
+          for (const [domain, entry] of Object.entries(dayData)) {
+            if (!weeklyData[domain]) {
+              weeklyData[domain] = { timeSpent: 0, category: entry.category };
+            }
+            weeklyData[domain].timeSpent += entry.timeSpent;
+          }
+        }
+        
+        const report = await generateWeeklyReport(weeklyData);
+        if (report && !report.error && report.report) {
+          await chrome.storage.local.set({ 
+            lastWeeklyReportDate: today,
+            latestWeeklyReport: report.report 
+          });
+          
+          chrome.notifications.create('focusflow_weekly_report', {
+            type: 'basic',
+            iconUrl: 'icons/icon128.png',
+            title: '✨ Weekly AI Productivity Report',
+            message: 'Your weekly insight is ready! Check the extension Stats tab to read it.',
+            priority: 2
+          });
+        }
+      }
+    }
   }
 }
 
