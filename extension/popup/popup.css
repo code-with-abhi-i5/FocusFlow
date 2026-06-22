@@ -7,11 +7,11 @@
   /* Colors — Dark Theme (default) */
   --bg-primary: #0a0a0f;
   --bg-secondary: #111118;
-  --bg-card: rgba(255, 255, 255, 0.04);
-  --bg-card-hover: rgba(255, 255, 255, 0.07);
-  --bg-glass: rgba(255, 255, 255, 0.06);
-  --border-color: rgba(255, 255, 255, 0.08);
-  --border-hover: rgba(255, 255, 255, 0.15);
+  --bg-card: rgba(255, 255, 255, 0.03);
+  --bg-card-hover: rgba(255, 255, 255, 0.08);
+  --bg-glass: rgba(10, 10, 15, 0.65);
+  --border-color: rgba(255, 255, 255, 0.06);
+  --border-hover: rgba(167, 139, 250, 0.3);
   --text-primary: #f0f0f5;
   --text-secondary: #8b8b9e;
   --text-muted: #55556a;
@@ -154,7 +154,16 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 16px;
-  backdrop-filter: blur(20px);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.score-section:hover {
+  border-color: var(--border-hover);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5), 0 0 20px rgba(167, 139, 250, 0.05);
+  transform: translateY(-2px);
 }
 
 .score-ring-container {
@@ -581,6 +590,13 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 14px;
+  transition: all 0.3s ease;
+}
+
+.goal-section:hover {
+  border-color: var(--border-hover);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  transform: translateY(-2px);
 }
 
 .goal-header {
@@ -665,7 +681,13 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 14px;
-  transition: border-color 0.3s ease;
+  transition: all 0.3s ease;
+}
+
+.pomodoro-section:hover:not(.is-running):not(.is-break) {
+  border-color: var(--border-hover);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  transform: translateY(-2px);
 }
 
 .pomodoro-section.is-running {

@@ -132,8 +132,8 @@ export const DashboardPage: React.FC = () => {
           value={`${streak?.currentStreak || 0} days`}
           description={`Personal best: ${streak?.bestStreak || 0}d`}
           icon={Flame}
-          iconColorClass="text-rose-500 dark:text-rose-400"
-          iconBgClass="bg-rose-500/10 dark:bg-rose-500/10"
+          iconColorClass={`text-rose-500 dark:text-rose-400 ${streak?.currentStreak && streak.currentStreak > 0 ? 'animate-pulse' : ''}`}
+          iconBgClass={`bg-rose-500/10 dark:bg-rose-500/10 ${streak?.currentStreak && streak.currentStreak >= 3 ? 'shadow-[0_0_15px_rgba(244,63,94,0.5)]' : ''}`}
         />
         <StatCard
           title="Productive Focus"

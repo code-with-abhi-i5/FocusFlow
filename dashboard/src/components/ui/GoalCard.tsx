@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { CheckCircle2, Target } from 'lucide-react';
+import confetti from 'canvas-confetti';
 
 interface GoalCardProps {
   title: string;
@@ -23,6 +24,20 @@ export const GoalCard: React.FC<GoalCardProps> = ({
   // Decide completion state
   const isCompleted = type === 'productive' ? percentage >= 100 : percentage < 100;
   const isExceeded = type === 'limit' && percentage >= 100;
+
+  const [hasFiredConfetti, setHasFiredConfetti] = useState(false);
+
+  useEffect(() => {
+    if (isCompleted && type === 'productive' && !hasFiredConfetti) {
+      confetti({
+        particleCount: 100,
+        spread: 70,
+        origin: { y: 0.6 },
+        colors: ['#10b981', '#8b5cf6', '#a78bfa']
+      });
+      setHasFiredConfetti(true);
+    }
+  }, [isCompleted, type, hasFiredConfetti]);
 
   // Decide colors
   const getProgressColor = () => {
