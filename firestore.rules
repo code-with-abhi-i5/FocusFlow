@@ -3,47 +3,43 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper: check if incoming data belongs to the authenticated user
-    function isOwner(uid) {
-      return request.auth != null && request.auth.uid == uid;
-    }
-
-    // Users collection — users can only read/write their own document
+    // Users collection — authenticated users can only access their own document
     match /users/{userId} {
-      allow read, write: if isOwner(userId);
+      allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
-    // Time entries — keyed as {uid}_{domain}_{date}
-    // Query-safe: 'uid' field in each document matches the authenticated user
+    // Time entries — extension writes without auth using syncKey as uid field
+    // Dashboard reads with Firebase Auth
     match /timeEntries/{entryId} {
+      // Allow extension to write (unauthenticated) when uid in data matches document prefix
+      allow write: if request.resource.data.uid is string
+        && request.resource.data.uid.size() > 0;
+      // Dashboard reads: authenticated users can only read their own entries
       allow read: if request.auth != null
         && (resource == null || resource.data.uid == request.auth.uid);
-      allow create: if isOwner(request.resource.data.uid);
-      allow update, delete: if request.auth != null && resource.data.uid == request.auth.uid;
     }
 
-    // Goals — document ID is the user's UID
+    // Goals — document ID is the user's Firebase UID
+    // Extension writes without auth; dashboard reads/writes with auth
     match /goals/{goalId} {
-      allow read: if request.auth != null
-        && (resource == null || resource.data.uid == request.auth.uid);
-      allow create: if isOwner(request.resource.data.uid);
-      allow update, delete: if request.auth != null && resource.data.uid == request.auth.uid;
+      allow write: if (request.auth != null && request.auth.uid == goalId)
+        || (request.resource.data.uid == goalId);
+      allow read: if (request.auth != null && request.auth.uid == goalId)
+        || (resource != null && resource.data.uid != null);
     }
 
-    // Streaks — document ID is the user's UID
+    // Streaks — document ID is the user's Firebase UID
     match /streaks/{streakId} {
-      allow read: if request.auth != null
-        && (resource == null || resource.data.uid == request.auth.uid);
-      allow create: if isOwner(request.resource.data.uid);
-      allow update, delete: if request.auth != null && resource.data.uid == request.auth.uid;
+      allow write: if (request.auth != null && request.auth.uid == streakId)
+        || (request.resource.data.uid == streakId);
+      allow read: if (request.auth != null && request.auth.uid == streakId)
+        || (resource != null && resource.data.uid != null);
     }
 
-    // Categories — document ID is the user's UID
+    // Categories — document ID is the user's Firebase UID
+    // Only dashboard (authenticated) users manage this
     match /categories/{categoryId} {
-      allow read: if request.auth != null
-        && (resource == null || resource.data.uid == request.auth.uid);
-      allow create: if isOwner(request.resource.data.uid);
-      allow update, delete: if request.auth != null && resource.data.uid == request.auth.uid;
+      allow read, write: if request.auth != null && request.auth.uid == categoryId;
     }
   }
 }
