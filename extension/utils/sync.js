@@ -118,6 +118,19 @@ export async function syncFromFirestore() {
       });
     }
 
+    // Pull categories (dashboard overrides)
+    const categoriesDoc = await getDoc(doc(db, 'categories', syncKey));
+    if (categoriesDoc.exists()) {
+      const catData = categoriesDoc.data();
+      await chrome.storage.local.set({ 
+        categories: {
+          productive: catData.productive || [],
+          unproductive: catData.unproductive || [],
+          neutral: catData.neutral || []
+        }
+      });
+    }
+
     console.log('FocusFlow: Synced from Firestore');
   } catch (error) {
     console.error('FocusFlow: Sync from Firestore failed', error);

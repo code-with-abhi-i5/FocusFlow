@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { subscribeToTimeEntries } from '../services/firebase/timeEntryService';
-import type { TimeEntry } from '../types';
+import { subscribeToCustomCategories } from '../services/firebase/categoryService';
+import type { TimeEntry, CustomCategories } from '../types';
 
 export interface DomainSummary {
   domain: string;
@@ -26,24 +27,32 @@ export function useTimeData() {
     }
 
     const todayStr = new Date().toISOString().split('T')[0];
+    let currentEntries: TimeEntry[] = [];
+    let currentCategories: CustomCategories | null = null;
 
-    const unsubscribe = subscribeToTimeEntries(user.uid, todayStr, (entries) => {
-      setTodayEntries(entries);
-
+    const computeSummaries = () => {
       let total = 0;
       let prod = 0;
       let unprod = 0;
 
-      // Group by domain in case there are duplicates (though document ID prevents it)
       const domainMap: Record<string, { timeSpent: number; category: any }> = {};
 
-      entries.forEach((entry) => {
+      currentEntries.forEach((entry) => {
+        // Apply custom category override if it exists
+        let activeCategory = entry.category;
+        if (currentCategories) {
+          const domain = entry.domain;
+          if (currentCategories.productive.includes(domain)) activeCategory = 'productive';
+          else if (currentCategories.unproductive.includes(domain)) activeCategory = 'unproductive';
+          else if (currentCategories.neutral.includes(domain)) activeCategory = 'neutral';
+        }
+
         total += entry.timeSpent;
-        if (entry.category === 'productive') prod += entry.timeSpent;
-        if (entry.category === 'unproductive') unprod += entry.timeSpent;
+        if (activeCategory === 'productive') prod += entry.timeSpent;
+        if (activeCategory === 'unproductive') unprod += entry.timeSpent;
 
         if (!domainMap[entry.domain]) {
-          domainMap[entry.domain] = { timeSpent: 0, category: entry.category };
+          domainMap[entry.domain] = { timeSpent: 0, category: activeCategory };
         }
         domainMap[entry.domain].timeSpent += entry.timeSpent;
       });
@@ -75,9 +84,23 @@ export function useTimeData() {
 
       setTopDomains(summaries);
       setLoading(false);
+    };
+
+    const unsubEntries = subscribeToTimeEntries(user.uid, todayStr, (entries) => {
+      currentEntries = entries;
+      setTodayEntries(entries);
+      computeSummaries();
     });
 
-    return () => unsubscribe();
+    const unsubCategories = subscribeToCustomCategories(user.uid, (cats) => {
+      currentCategories = cats;
+      computeSummaries();
+    });
+
+    return () => {
+      unsubEntries();
+      unsubCategories();
+    };
   }, [user]);
 
   return {
