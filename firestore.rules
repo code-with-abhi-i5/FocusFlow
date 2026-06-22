@@ -3,36 +3,46 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // Helper: check if incoming data belongs to the authenticated user
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
     // Users collection — users can only read/write their own document
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if isOwner(userId);
     }
 
-    // Time entries — users can only access their own entries
+    // Time entries — keyed as {uid}_{domain}_{date}
+    // Query-safe: 'uid' field in each document matches the authenticated user
     match /timeEntries/{entryId} {
-      allow read: if request.auth != null && resource.data.uid == request.auth.uid;
-      allow create: if request.auth != null && request.resource.data.uid == request.auth.uid;
+      allow read: if request.auth != null
+        && (resource == null || resource.data.uid == request.auth.uid);
+      allow create: if isOwner(request.resource.data.uid);
       allow update, delete: if request.auth != null && resource.data.uid == request.auth.uid;
     }
 
-    // Goals — users can only access their own goals
+    // Goals — document ID is the user's UID
     match /goals/{goalId} {
-      allow read: if request.auth != null && resource.data.uid == request.auth.uid;
-      allow create: if request.auth != null && request.resource.data.uid == request.auth.uid;
+      allow read: if request.auth != null
+        && (resource == null || resource.data.uid == request.auth.uid);
+      allow create: if isOwner(request.resource.data.uid);
       allow update, delete: if request.auth != null && resource.data.uid == request.auth.uid;
     }
 
-    // Streaks — users can only access their own streaks
+    // Streaks — document ID is the user's UID
     match /streaks/{streakId} {
-      allow read: if request.auth != null && resource.data.uid == request.auth.uid;
-      allow create: if request.auth != null && request.resource.data.uid == request.auth.uid;
+      allow read: if request.auth != null
+        && (resource == null || resource.data.uid == request.auth.uid);
+      allow create: if isOwner(request.resource.data.uid);
       allow update, delete: if request.auth != null && resource.data.uid == request.auth.uid;
     }
 
-    // Categories — users can only manage their own categories
+    // Categories — document ID is the user's UID
     match /categories/{categoryId} {
-      allow read: if request.auth != null && resource.data.uid == request.auth.uid;
-      allow create: if request.auth != null && request.resource.data.uid == request.auth.uid;
+      allow read: if request.auth != null
+        && (resource == null || resource.data.uid == request.auth.uid);
+      allow create: if isOwner(request.resource.data.uid);
       allow update, delete: if request.auth != null && resource.data.uid == request.auth.uid;
     }
   }
