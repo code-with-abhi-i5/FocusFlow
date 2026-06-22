@@ -13,6 +13,8 @@ export const SettingsPage: React.FC = () => {
   const [newDomain, setNewDomain] = useState('');
   const [newCategory, setNewCategory] = useState<ProductivityCategory>('productive');
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
   // Sync settings states
   const [alertsEnabled, setAlertsEnabled] = useState(true);
@@ -34,15 +36,17 @@ export const SettingsPage: React.FC = () => {
 
   const handleAddDomain = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !categories || !newDomain.trim()) return;
+    if (!user || !newDomain.trim()) return;
 
+    setSaveError(null);
+    setSaveSuccess(false);
     setIsSaving(true);
     const domain = newDomain.trim().toLowerCase();
 
-    // Copy existing arrays
-    const productive = [...categories.productive];
-    const unproductive = [...categories.unproductive];
-    const neutral = [...categories.neutral];
+    // Use current categories or start fresh
+    const productive = [...(categories?.productive ?? [])];
+    const unproductive = [...(categories?.unproductive ?? [])];
+    const neutral = [...(categories?.neutral ?? [])];
 
     // Remove domain from all categories first to avoid duplicates
     const filterFn = (d: string) => d !== domain;
@@ -62,8 +66,11 @@ export const SettingsPage: React.FC = () => {
         neutral: cleanNeutral
       });
       setNewDomain('');
-    } catch (err) {
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (err: any) {
       console.error('Failed to add custom domain category', err);
+      setSaveError(err?.message || 'Failed to save. Check your connection or Firestore rules.');
     } finally {
       setIsSaving(false);
     }
@@ -169,9 +176,15 @@ export const SettingsPage: React.FC = () => {
                 disabled={isSaving}
                 className="rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-5 py-3 text-xs font-semibold text-white shadow-lg shadow-violet-500/20 hover:from-violet-500 hover:to-indigo-500 cursor-pointer disabled:opacity-50"
               >
-                Add Rule
+                {isSaving ? 'Saving...' : 'Add Rule'}
               </button>
             </form>
+            {saveError && (
+              <p className="mt-2 text-xs text-rose-400">⚠ {saveError}</p>
+            )}
+            {saveSuccess && (
+              <p className="mt-2 text-xs text-emerald-400">✓ Domain rule saved successfully!</p>
+            )}
           </div>
 
           {/* Grid listings of domain categories */}
